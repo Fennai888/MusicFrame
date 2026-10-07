@@ -98,6 +98,7 @@ fun Modifier.glass(r: Dp): Modifier = this
 fun App() {
     val ctx = LocalContext.current
     var songs by remember { mutableStateOf(Store.load(ctx)) }
+    var playingIndex by remember { mutableStateOf<Int?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val added = uris.map { u ->
             try {
@@ -116,7 +117,7 @@ fun App() {
         if (songs.isEmpty()) {
             EmptyCard { picker.launch(arrayOf("audio/*")) }
         } else {
-            Library(songs)
+            Library(songs) { playingIndex = it }
             Box(
                 Modifier
                     .align(Alignment.BottomEnd)
@@ -129,6 +130,9 @@ fun App() {
             ) {
                 Text("+", color = Color.White, fontSize = 32.sp)
             }
+        }
+        playingIndex?.let { i ->
+            PlayerScreen(songs, i, onClose = { playingIndex = null })
         }
     }
 }
@@ -183,7 +187,7 @@ fun EmptyCard(onClick: () -> Unit) {
 }
 
 @Composable
-fun Library(songs: List<Song>) {
+fun Library(songs: List<Song>, onPlay: (Int) -> Unit) {
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Text(
             "เพลงของฉัน",
@@ -198,14 +202,14 @@ fun Library(songs: List<Song>) {
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            items(songs) { MiniCard(it) }
+            itemsIndexed(songs) { i, s -> MiniCard(s) { onPlay(i) } }
         }
     }
 }
 
 @Composable
-fun MiniCard(s: Song) {
-    Column(Modifier.fillMaxWidth().glass(24.dp).padding(8.dp)) {
+fun MiniCard(s: Song, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().glass(24.dp).clickable { onClick() }.padding(8.dp)) {
         Box(
             Modifier
                 .fillMaxWidth()
