@@ -89,8 +89,9 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
                         onDragEnd = {
                             val d = dragX.value
                             scope.launch {
-                                if (d < -200f) player.seekToNextMediaItem()
-                                else if (d > 200f) player.seekToPreviousMediaItem()
+                                val cur = player.currentMediaItemIndex
+                                if (d < -200f && cur < player.mediaItemCount - 1) player.seekTo(cur + 1, 0L)
+                                else if (d > 200f && cur > 0) player.seekTo(cur - 1, 0L)
                                 dragX.animateTo(0f, tween(250))
                             }
                         },
