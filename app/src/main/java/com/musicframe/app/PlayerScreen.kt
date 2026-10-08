@@ -1,5 +1,6 @@
 package com.musicframe.app
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -24,6 +25,8 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -43,6 +46,40 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+
+fun trimBorders(b: Bitmap): Bitmap {
+    val w = b.width
+    val h = b.height
+    val px = IntArray(w * h)
+    b.getPixels(px, 0, w, 0, 0, w, h)
+    fun blank(p: Int): Boolean {
+        if ((p ushr 24) < 16) return true
+        return ((p shr 16) and 255) < 30 && ((p shr 8) and 255) < 30 && (p and 255) < 30
+    }
+    fun rowBlank(y: Int): Boolean {
+        var n = 0
+        for (x in 0 until w) if (!blank(px[y * w + x])) n++
+        return n <= w / 100
+    }
+    fun colBlank(x: Int, t: Int, bt: Int): Boolean {
+        var n = 0
+        for (y in t..bt) if (!blank(px[y * w + x])) n++
+        return n <= (bt - t + 1) / 100
+    }
+    var top = 0
+    var bottom = h - 1
+    var left = 0
+    var right = w - 1
+    while (top < bottom && rowBlank(top)) top++
+    while (bottom > top && rowBlank(bottom)) bottom--
+    while (left < right && colBlank(left, top, bottom)) left++
+    while (right > left && colBlank(right, top, bottom)) right--
+    val nw = right - left + 1
+    val nh = bottom - top + 1
+    if (nw == w && nh == h) return b
+    if (nw.toLong() * nh < w.toLong() * h * 35 / 100) return b
+    return Bitmap.createBitmap(b, left, top, nw, nh)
+}
 
 @Composable
 fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
@@ -83,7 +120,9 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
                 r.setDataSource(ctx, Uri.parse(s.uri))
                 r.embeddedPicture?.let {
                     val o = BitmapFactory.Options().apply { inSampleSize = 2 }
-                    BitmapFactory.decodeByteArray(it, 0, it.size, o)?.asImageBitmap()
+                    BitmapFactory.decodeByteArray(it, 0, it.size, o)?.let { bmp ->
+                        trimBorders(bmp).asImageBitmap()
+                    }
                 }
             } catch (e: Exception) {
                 null
@@ -95,19 +134,19 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
     val c = cover
 
     Box(Modifier.fillMaxSize()) {
+        Backdrop()
         if (c != null) {
             Image(
                 bitmap = c,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
                     .blur(60.dp, BlurredEdgeTreatment.Unbounded)
             )
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.18f)))
-        } else {
-            Backdrop()
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
         }
         Column(
             Modifier
