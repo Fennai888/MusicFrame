@@ -2,6 +2,7 @@ package com.musicframe.app
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -9,11 +10,9 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -33,6 +32,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,6 +43,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -54,7 +55,7 @@ fun trimBorders(b: Bitmap): Bitmap {
     b.getPixels(px, 0, w, 0, 0, w, h)
     fun blank(p: Int): Boolean {
         if ((p ushr 24) < 16) return true
-        return ((p shr 16) and 255) < 30 && ((p shr 8) and 255) < 30 && (p and 255) < 30
+        return ((p shr 16) and 255) < 8 && ((p shr 8) and 255) < 8 && (p and 255) < 8
     }
     fun rowBlank(y: Int): Boolean {
         var n = 0
@@ -81,6 +82,19 @@ fun trimBorders(b: Bitmap): Bitmap {
     return Bitmap.createBitmap(b, left, top, nw, nh)
 }
 
+fun prepareCover(src: Bitmap): Bitmap {
+    val flat = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+    val cv = Canvas(flat)
+    cv.drawColor(android.graphics.Color.BLACK)
+    cv.drawBitmap(src, 0f, 0f, null)
+    return trimBorders(flat)
+}
+
+fun fmtTime(ms: Long): String {
+    val t = (ms / 1000).coerceAtLeast(0)
+    return "${t / 60}:${(t % 60).toString().padStart(2, '0')}"
+}
+
 @Composable
 fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
     val ctx = LocalContext.current
@@ -94,6 +108,8 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
         }
     }
     var index by remember { mutableIntStateOf(startIndex) }
+    var posMs by remember { mutableLongStateOf(0L) }
+    var durMs by remember { mutableLongStateOf(0L) }
     DisposableEffect(player) {
         val l = object : Player.Listener {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
@@ -104,6 +120,13 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
         onDispose {
             player.removeListener(l)
             player.release()
+        }
+    }
+    LaunchedEffect(player) {
+        while (true) {
+            posMs = player.currentPosition
+            durMs = player.duration.coerceAtLeast(0L)
+            delay(250)
         }
     }
     BackHandler(onBack = onClose)
@@ -121,7 +144,7 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
                 r.embeddedPicture?.let {
                     val o = BitmapFactory.Options().apply { inSampleSize = 2 }
                     BitmapFactory.decodeByteArray(it, 0, it.size, o)?.let { bmp ->
-                        trimBorders(bmp).asImageBitmap()
+                        prepareCover(bmp).asImageBitmap()
                     }
                 }
             } catch (e: Exception) {
@@ -133,8 +156,7 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
     }
     val c = cover
 
-    Box(Modifier.fillMaxSize()) {
-        Backdrop()
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (c != null) {
             Image(
                 bitmap = c,
@@ -147,6 +169,8 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
                     .blur(60.dp, BlurredEdgeTreatment.Unbounded)
             )
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
+        } else {
+            Backdrop()
         }
         Column(
             Modifier
@@ -223,20 +247,19 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
-                Box(
-                    Modifier
-                        .padding(horizontal = 10.dp)
-                        .size(44.dp)
-                        .border(
-                            5.dp,
-                            Brush.sweepGradient(
-                                listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
-                            ),
-                            CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
+                Column(
+                    Modifier.padding(horizontal = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("♪", color = Color.White, fontSize = 18.sp)
+                    Text(
+                        fmtTime(posMs), color = Color.White, fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp, fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        if (durMs > 0) "-" + fmtTime(durMs - posMs) else "--:--",
+                        color = Color.White.copy(alpha = 0.75f),
+                        fontSize = 11.sp, fontFamily = FontFamily.Monospace
+                    )
                 }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                     Text(
