@@ -48,7 +48,13 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Song(val uri: String, val title: String, val artist: String, val album: String)
+data class Song(
+    val uri: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val cover: String = ""
+)
 
 object Store {
     fun load(c: Context): List<Song> {
@@ -56,14 +62,27 @@ object Store {
         val a = JSONArray(s)
         return (0 until a.length()).map {
             val o = a.getJSONObject(it)
-            Song(o.getString("uri"), o.getString("title"), o.getString("artist"), o.getString("album"))
+            Song(
+                o.getString("uri"),
+                o.getString("title"),
+                o.getString("artist"),
+                o.getString("album"),
+                o.optString("cover", "")
+            )
         }
     }
 
     fun save(c: Context, l: List<Song>) {
         val a = JSONArray()
         l.forEach {
-            a.put(JSONObject().put("uri", it.uri).put("title", it.title).put("artist", it.artist).put("album", it.album))
+            a.put(
+                JSONObject()
+                    .put("uri", it.uri)
+                    .put("title", it.title)
+                    .put("artist", it.artist)
+                    .put("album", it.album)
+                    .put("cover", it.cover)
+            )
         }
         c.getSharedPreferences("songs", 0).edit().putString("list", a.toString()).apply()
     }
@@ -309,7 +328,15 @@ fun App() {
                 }
             }
             playingIndex?.let { i ->
-                PlayerScreen(songs, i, onClose = { playingIndex = null })
+                PlayerScreen(
+                    songs,
+                    i,
+                    onUpdate = { idx, sg ->
+                        songs = songs.toMutableList().also { it[idx] = sg }
+                        Store.save(ctx, songs)
+                    },
+                    onClose = { playingIndex = null }
+                )
             }
         }
     }
@@ -417,6 +444,11 @@ fun Library(songs: List<Song>, onPlay: (Int) -> Unit) {
 
 @Composable
 fun MiniCard(s: Song, onClick: () -> Unit) {
+    val ctx = LocalContext.current
+    val thumb by produceState<ImageBitmap?>(null, s.uri, s.cover) {
+        value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 600)?.asImageBitmap() }
+    }
+    val t = thumb
     Glass(Modifier.fillMaxWidth(), radius = 24.dp, onClick = onClick) {
         Column(Modifier.fillMaxWidth().padding(8.dp)) {
             Box(
@@ -427,7 +459,17 @@ fun MiniCard(s: Song, onClick: () -> Unit) {
                     .background(Brush.linearGradient(listOf(Color(0xFF5BA3D0), Color(0xFFF2B38F)))),
                 contentAlignment = Alignment.Center
             ) {
-                Text("♪", color = Color.White, fontSize = 40.sp)
+                if (t != null) {
+                    Image(
+                        bitmap = t,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        filterQuality = FilterQuality.High,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text("♪", color = Color.White, fontSize = 40.sp)
+                }
             }
             Spacer(Modifier.height(8.dp))
             Column(
