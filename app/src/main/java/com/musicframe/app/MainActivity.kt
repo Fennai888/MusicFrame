@@ -2,6 +2,7 @@ package com.musicframe.app
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -24,14 +25,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -104,6 +111,98 @@ fun Modifier.glass(r: Dp): Modifier = this
         RoundedCornerShape(r)
     )
 
+val LocalSoftBg = compositionLocalOf<ImageBitmap?> { null }
+val LocalScreenSize = compositionLocalOf { IntSize.Zero }
+
+data class BgImages(val full: ImageBitmap, val soft: ImageBitmap)
+
+fun softBlur(src: Bitmap): Bitmap {
+    var b = src
+    while (b.width > 160 && b.height > 160) {
+        b = Bitmap.createScaledBitmap(b, b.width / 2, b.height / 2, true)
+    }
+    return b
+}
+
+@Composable
+fun rememberBackground(uri: String?): State<BgImages?> {
+    val ctx = LocalContext.current
+    return produceState<BgImages?>(null, uri) {
+        value = if (uri == null) null else withContext(Dispatchers.IO) {
+            try {
+                val src = ImageDecoder.createSource(ctx.contentResolver, Uri.parse(uri))
+                val bmp = ImageDecoder.decodeBitmap(src) { dec, info, _ ->
+                    dec.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    val m = maxOf(info.size.width, info.size.height)
+                    if (m > 2400) dec.setTargetSampleSize((m / 2400) + 1)
+                }
+                BgImages(bmp.asImageBitmap(), softBlur(bmp).asImageBitmap())
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+}
+
+@Composable
+fun Glass(
+    modifier: Modifier = Modifier,
+    radius: Dp,
+    contentAlignment: Alignment = Alignment.TopStart,
+    dim: Float = 0f,
+    onClick: (() -> Unit)? = null,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val soft = LocalSoftBg.current
+    val screen = LocalScreenSize.current
+    val density = LocalDensity.current
+    var pos by remember { mutableStateOf(IntOffset.Zero) }
+    val shape = RoundedCornerShape(radius)
+    val hasBlur = soft != null && screen.width > 0
+    val a1 = if (hasBlur) 0.22f else 0.30f
+    val a2 = if (hasBlur) 0.08f else 0.12f
+    Box(
+        modifier
+            .onGloballyPositioned { pos = it.positionInRoot().round() }
+            .clip(shape)
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
+        contentAlignment = contentAlignment
+    ) {
+        if (soft != null && screen.width > 0) {
+            Box(Modifier.matchParentSize()) {
+                Image(
+                    bitmap = soft,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    filterQuality = FilterQuality.High,
+                    colorFilter = ColorFilter.tint(Color.Black.copy(alpha = 0.12f), BlendMode.SrcOver),
+                    modifier = Modifier
+                        .wrapContentSize(Alignment.TopStart, unbounded = true)
+                        .offset { IntOffset(-pos.x, -pos.y) }
+                        .requiredSize(
+                            with(density) { screen.width.toDp() },
+                            with(density) { screen.height.toDp() }
+                        )
+                )
+            }
+        }
+        if (dim > 0f) {
+            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = dim)))
+        }
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = a1), Color.White.copy(alpha = a2))))
+                .border(
+                    1.5.dp,
+                    Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.7f), Color.White.copy(alpha = 0.15f))),
+                    shape
+                )
+        )
+        content()
+    }
+}
+
 @Composable
 fun App() {
     val ctx = LocalContext.current
@@ -111,6 +210,8 @@ fun App() {
     var playingIndex by remember { mutableStateOf<Int?>(null) }
     var bgUri by remember { mutableStateOf(ctx.getSharedPreferences("settings", 0).getString("bg", null)) }
     var showSettings by remember { mutableStateOf(false) }
+    var screen by remember { mutableStateOf(IntSize.Zero) }
+    val bg by rememberBackground(bgUri)
 
     fun saveBg(v: String?) {
         ctx.getSharedPreferences("settings", 0).edit().putString("bg", v).apply()
@@ -141,69 +242,75 @@ fun App() {
     }
     BackHandler(enabled = showSettings) { showSettings = false }
 
-    Box(Modifier.fillMaxSize()) {
-        HomeBackground(bgUri)
-        if (songs.isEmpty()) {
-            EmptyCard { picker.launch(arrayOf("audio/*")) }
-        } else {
-            Library(songs) { playingIndex = it }
-            Box(
-                Modifier
-                    .align(Alignment.BottomEnd)
-                    .navigationBarsPadding()
-                    .padding(24.dp)
-                    .size(64.dp)
-                    .glass(32.dp)
-                    .clickable { picker.launch(arrayOf("audio/*")) },
-                contentAlignment = Alignment.Center
-            ) {
-                Text("+", color = Color.White, fontSize = 32.sp)
-            }
-        }
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .statusBarsPadding()
-                .padding(16.dp)
-                .size(44.dp)
-                .background(Color.Black.copy(alpha = 0.2f), CircleShape)
-                .glass(22.dp)
-                .clickable { showSettings = true },
-            contentAlignment = Alignment.Center
-        ) {
-            Text("⚙", color = Color.White, fontSize = 20.sp)
-        }
-        if (showSettings) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .pointerInput(Unit) { detectTapGestures { showSettings = false } }
-            )
-            Column(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(16.dp)
-                    .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(32.dp))
-                    .glass(32.dp)
-                    .padding(vertical = 8.dp)
-            ) {
-                SettingRow("เลือกรูปพื้นหลัง") {
-                    showSettings = false
-                    bgPicker.launch(arrayOf("image/*"))
+    CompositionLocalProvider(
+        LocalSoftBg provides bg?.soft,
+        LocalScreenSize provides screen
+    ) {
+        Box(Modifier.fillMaxSize().onSizeChanged { screen = it }) {
+            HomeBackground(bg)
+            if (songs.isEmpty()) {
+                EmptyCard { picker.launch(arrayOf("audio/*")) }
+            } else {
+                Library(songs) { playingIndex = it }
+                Glass(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(24.dp)
+                        .size(64.dp),
+                    radius = 32.dp,
+                    contentAlignment = Alignment.Center,
+                    onClick = { picker.launch(arrayOf("audio/*")) }
+                ) {
+                    Text("+", color = Color.White, fontSize = 32.sp)
                 }
-                if (bgUri != null) {
-                    SettingRow("ใช้พื้นหลังเดิม") {
-                        showSettings = false
-                        saveBg(null)
+            }
+            Glass(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(16.dp)
+                    .size(44.dp),
+                radius = 22.dp,
+                contentAlignment = Alignment.Center,
+                dim = 0.2f,
+                onClick = { showSettings = true }
+            ) {
+                Text("⚙", color = Color.White, fontSize = 20.sp)
+            }
+            if (showSettings) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f))
+                        .pointerInput(Unit) { detectTapGestures { showSettings = false } }
+                )
+                Glass(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    radius = 32.dp,
+                    dim = 0.35f
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                        SettingRow("เลือกรูปพื้นหลัง") {
+                            showSettings = false
+                            bgPicker.launch(arrayOf("image/*"))
+                        }
+                        if (bgUri != null) {
+                            SettingRow("ใช้พื้นหลังเดิม") {
+                                showSettings = false
+                                saveBg(null)
+                            }
+                        }
                     }
                 }
             }
-        }
-        playingIndex?.let { i ->
-            PlayerScreen(songs, i, onClose = { playingIndex = null })
+            playingIndex?.let { i ->
+                PlayerScreen(songs, i, onClose = { playingIndex = null })
+            }
         }
     }
 }
@@ -223,25 +330,10 @@ fun SettingRow(text: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun HomeBackground(uri: String?) {
-    val ctx = LocalContext.current
-    val bmp by produceState<ImageBitmap?>(null, uri) {
-        value = if (uri == null) null else withContext(Dispatchers.IO) {
-            try {
-                val src = ImageDecoder.createSource(ctx.contentResolver, Uri.parse(uri))
-                ImageDecoder.decodeBitmap(src) { dec, info, _ ->
-                    val m = maxOf(info.size.width, info.size.height)
-                    if (m > 2400) dec.setTargetSampleSize((m / 2400) + 1)
-                }.asImageBitmap()
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
-    val b = bmp
-    if (b != null) {
+fun HomeBackground(images: BgImages?) {
+    if (images != null) {
         Image(
-            bitmap = b,
+            bitmap = images.full,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             filterQuality = FilterQuality.High,
@@ -280,24 +372,24 @@ fun Backdrop() {
 @Composable
 fun EmptyCard(onClick: () -> Unit) {
     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .glass(40.dp)
-                .clickable { onClick() }
-                .padding(horizontal = 24.dp, vertical = 48.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text("♪", color = Color.White, fontSize = 48.sp)
-            Spacer(Modifier.height(12.dp))
-            Text("เพิ่มเพลงแรก", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "เลือกไฟล์ .mp3 จากเครื่อง",
-                color = Color.White.copy(alpha = 0.8f),
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center
-            )
+        Glass(Modifier.fillMaxWidth(), radius = 40.dp, onClick = onClick) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 48.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("♪", color = Color.White, fontSize = 48.sp)
+                Spacer(Modifier.height(12.dp))
+                Text("เพิ่มเพลงแรก", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "เลือกไฟล์ .mp3 จากเครื่อง",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }
@@ -325,40 +417,42 @@ fun Library(songs: List<Song>, onPlay: (Int) -> Unit) {
 
 @Composable
 fun MiniCard(s: Song, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().glass(24.dp).clickable { onClick() }.padding(8.dp)) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.85f)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF5BA3D0), Color(0xFFF2B38F)))),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("♪", color = Color.White, fontSize = 40.sp)
-        }
-        Spacer(Modifier.height(8.dp))
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color.White.copy(alpha = 0.25f))
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-        ) {
-            Text(
-                s.title,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                if (s.artist.isBlank()) "ไม่ทราบศิลปิน" else s.artist,
-                color = Color.White.copy(alpha = 0.75f),
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+    Glass(Modifier.fillMaxWidth(), radius = 24.dp, onClick = onClick) {
+        Column(Modifier.fillMaxWidth().padding(8.dp)) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.85f)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF5BA3D0), Color(0xFFF2B38F)))),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("♪", color = Color.White, fontSize = 40.sp)
+            }
+            Spacer(Modifier.height(8.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White.copy(alpha = 0.25f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    s.title,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    if (s.artist.isBlank()) "ไม่ทราบศิลปิน" else s.artist,
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
