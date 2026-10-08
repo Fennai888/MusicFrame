@@ -1,9 +1,12 @@
 package com.musicframe.app
 
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -15,11 +18,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -30,7 +39,9 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 @Composable
@@ -65,15 +76,46 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
     val dragX = remember { Animatable(0f) }
     val s = songs.getOrNull(index) ?: return
 
+    val cover by produceState<ImageBitmap?>(null, s.uri) {
+        value = withContext(Dispatchers.IO) {
+            val r = MediaMetadataRetriever()
+            try {
+                r.setDataSource(ctx, Uri.parse(s.uri))
+                r.embeddedPicture?.let {
+                    val o = BitmapFactory.Options().apply { inSampleSize = 2 }
+                    BitmapFactory.decodeByteArray(it, 0, it.size, o)?.asImageBitmap()
+                }
+            } catch (e: Exception) {
+                null
+            } finally {
+                r.release()
+            }
+        }
+    }
+    val c = cover
+
     Box(Modifier.fillMaxSize()) {
-        Backdrop()
+        if (c != null) {
+            Image(
+                bitmap = c,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
+                    .blur(60.dp, BlurredEdgeTreatment.Unbounded)
+            )
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.18f)))
+        } else {
+            Backdrop()
+        }
         Column(
             Modifier
-                .fillMaxSize()
-                .systemBarsPadding()
-                .padding(20.dp)
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = 28.dp)
                 .offset { IntOffset(dragX.value.roundToInt(), 0) }
-                .glass(56.dp)
+                .glass(44.dp)
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = {
                         if (player.playWhenReady) player.pause() else player.play()
@@ -106,39 +148,48 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .clip(RoundedCornerShape(44.dp))
+                    .aspectRatio(0.9f)
+                    .clip(RoundedCornerShape(34.dp))
                     .background(Brush.linearGradient(listOf(Color(0xFF5BA3D0), Color(0xFFF2B38F)))),
                 contentAlignment = Alignment.Center
             ) {
-                Text("♪", color = Color.White.copy(alpha = 0.6f), fontSize = 72.sp)
+                if (c != null) {
+                    Image(
+                        bitmap = c,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text("♪", color = Color.White.copy(alpha = 0.6f), fontSize = 72.sp)
+                }
                 Text(flashIcon, color = Color.White, fontSize = 64.sp, modifier = Modifier.alpha(flash.value))
             }
             Spacer(Modifier.height(10.dp))
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(40.dp))
+                    .clip(RoundedCornerShape(34.dp))
                     .background(Color.White.copy(alpha = 0.35f))
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        s.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                        s.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        s.artist, color = Color.White.copy(alpha = 0.75f), fontSize = 13.sp,
+                        s.artist, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
                 Box(
                     Modifier
-                        .padding(horizontal = 12.dp)
-                        .size(52.dp)
+                        .padding(horizontal = 10.dp)
+                        .size(44.dp)
                         .border(
-                            6.dp,
+                            5.dp,
                             Brush.sweepGradient(
                                 listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
                             ),
@@ -146,11 +197,11 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("♪", color = Color.White, fontSize = 20.sp)
+                    Text("♪", color = Color.White, fontSize = 18.sp)
                 }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                     Text(
-                        s.album, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
+                        s.album, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
                         textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
