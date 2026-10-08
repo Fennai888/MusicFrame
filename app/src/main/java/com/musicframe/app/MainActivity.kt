@@ -178,8 +178,9 @@ fun Glass(
     var pos by remember { mutableStateOf(IntOffset.Zero) }
     val shape = RoundedCornerShape(radius)
     val hasBlur = soft != null && screen.width > 0
-    val a1 = if (hasBlur) 0.22f else 0.30f
-    val a2 = if (hasBlur) 0.08f else 0.12f
+    val dark = dim > 0f
+    val a1 = if (dark) 0.08f else if (hasBlur) 0.22f else 0.30f
+    val a2 = if (dark) 0.03f else if (hasBlur) 0.08f else 0.12f
     Box(
         modifier
             .onGloballyPositioned { pos = it.positionInRoot().round() }
@@ -212,11 +213,6 @@ fun Glass(
             Modifier
                 .matchParentSize()
                 .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = a1), Color.White.copy(alpha = a2))))
-                .border(
-                    1.5.dp,
-                    Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.7f), Color.White.copy(alpha = 0.15f))),
-                    shape
-                )
         )
         content()
     }
