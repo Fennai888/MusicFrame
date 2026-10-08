@@ -1,19 +1,22 @@
 package com.musicframe.app
 
+import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,16 +31,22 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
@@ -97,9 +106,41 @@ fun fmtTime(ms: Long): String {
 }
 
 @Composable
-fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
+fun GlassField(value: String, onChange: (String) -> Unit, hint: String, size: TextUnit, bold: Boolean) {
+    BasicTextField(
+        value = value,
+        onValueChange = onChange,
+        singleLine = true,
+        textStyle = TextStyle(
+            color = Color.White,
+            fontSize = size,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal
+        ),
+        cursorBrush = SolidColor(Color.White),
+        modifier = Modifier.fillMaxWidth(),
+        decorationBox = { inner ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.White.copy(alpha = 0.18f))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                if (value.isEmpty()) {
+                    Text(hint, color = Color.White.copy(alpha = 0.5f), fontSize = size)
+                }
+                inner()
+            }
+        }
+    )
+}
+
+@Composable
+fun PlayerScreen(songs: List<Song>, startIndex: Int, onUpdate: (Int, Song) -> Unit, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    val focus = LocalFocusManager.current
     val player = remember {
         ExoPlayer.Builder(ctx).build().apply {
             setMediaItems(songs.map { MediaItem.fromUri(Uri.parse(it.uri)) })
@@ -111,6 +152,8 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
     var index by remember { mutableIntStateOf(startIndex) }
     var posMs by remember { mutableLongStateOf(0L) }
     var durMs by remember { mutableLongStateOf(0L) }
+    var editing by remember { mutableStateOf(false) }
+    var showCoverSheet by remember { mutableStateOf(false) }
     DisposableEffect(player) {
         val l = object : Player.Listener {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
@@ -130,147 +173,252 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
             delay(250)
         }
     }
-    BackHandler(onBack = onClose)
+    BackHandler(enabled = !editing && !showCoverSheet, onBack = onClose)
+    BackHandler(enabled = editing) { editing = false }
+    BackHandler(enabled = showCoverSheet) { showCoverSheet = false }
+
+    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u ->
+        if (u != null) {
+            try {
+                ctx.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {
+            }
+            songs.getOrNull(index)?.let { onUpdate(index, it.copy(cover = u.toString())) }
+        }
+    }
 
     val flash = remember { Animatable(0f) }
     var flashIcon by remember { mutableStateOf("▶") }
     val dragX = remember { Animatable(0f) }
     val s = songs.getOrNull(index) ?: return
 
-    val cover by produceState<ImageBitmap?>(null, s.uri) {
-        value = withContext(Dispatchers.IO) {
-            val r = MediaMetadataRetriever()
-            try {
-                r.setDataSource(ctx, Uri.parse(s.uri))
-                r.embeddedPicture?.let {
-                    val bo = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeByteArray(it, 0, it.size, bo)
-                    val ss = if (maxOf(bo.outWidth, bo.outHeight) > 2000) 2 else 1
-                    val o = BitmapFactory.Options().apply { inSampleSize = ss }
-                    BitmapFactory.decodeByteArray(it, 0, it.size, o)?.let { bmp ->
-                        prepareCover(bmp).asImageBitmap()
-                    }
-                }
-            } catch (e: Exception) {
-                null
-            } finally {
-                r.release()
-            }
-        }
+    var tTitle by remember(editing) { mutableStateOf(s.title) }
+    var tArtist by remember(editing) { mutableStateOf(s.artist) }
+    var tAlbum by remember(editing) { mutableStateOf(s.album) }
+
+    val cover by produceState<ImageBitmap?>(null, s.uri, s.cover) {
+        value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 1600)?.asImageBitmap() }
     }
     val c = cover
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        if (c != null) {
-            Image(
-                bitmap = c,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
-                    .blur(60.dp, BlurredEdgeTreatment.Unbounded)
-            )
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
-        } else {
-            Backdrop()
+    fun toggle() {
+        if (player.playWhenReady) player.pause() else player.play()
+        flashIcon = if (player.playWhenReady) "▶" else "❚❚"
+        scope.launch {
+            flash.snapTo(1f)
+            flash.animateTo(0f, tween(700))
         }
-        Column(
-            Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth()
-                .padding(horizontal = 28.dp)
-                .offset { IntOffset(dragX.value.roundToInt(), 0) }
-                .glass(44.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = {
-                        if (player.playWhenReady) player.pause() else player.play()
-                        flashIcon = if (player.playWhenReady) "▶" else "❚❚"
-                        scope.launch {
-                            flash.snapTo(1f)
-                            flash.animateTo(0f, tween(700))
-                        }
-                    })
-                }
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            val d = dragX.value
-                            scope.launch {
-                                val cur = player.currentMediaItemIndex
-                                if (d < -200f && cur < player.mediaItemCount - 1) player.seekTo(cur + 1, 0L)
-                                else if (d > 200f && cur > 0) player.seekTo(cur - 1, 0L)
-                                dragX.animateTo(0f, tween(250))
+    }
+
+    CompositionLocalProvider(LocalSoftBg provides null) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            if (c != null) {
+                Image(
+                    bitmap = c,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
+                        .blur(60.dp, BlurredEdgeTreatment.Unbounded)
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
+            } else {
+                Backdrop()
+            }
+            Box(Modifier.fillMaxSize().imePadding()) {
+                Column(
+                    Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth()
+                        .padding(horizontal = 28.dp)
+                        .offset { IntOffset(dragX.value.roundToInt(), 0) }
+                        .glass(44.dp)
+                        .pointerInput(Unit) {
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    val d = dragX.value
+                                    scope.launch {
+                                        if (!editing) {
+                                            val cur = player.currentMediaItemIndex
+                                            if (d < -200f && cur < player.mediaItemCount - 1) player.seekTo(cur + 1, 0L)
+                                            else if (d > 200f && cur > 0) player.seekTo(cur - 1, 0L)
+                                        }
+                                        dragX.animateTo(0f, tween(250))
+                                    }
+                                },
+                                onDragCancel = { scope.launch { dragX.animateTo(0f, tween(250)) } }
+                            ) { change, amount ->
+                                if (!editing) {
+                                    change.consume()
+                                    scope.launch { dragX.snapTo(dragX.value + amount) }
+                                }
                             }
-                        },
-                        onDragCancel = { scope.launch { dragX.animateTo(0f, tween(250)) } }
-                    ) { change, amount ->
-                        change.consume()
-                        scope.launch { dragX.snapTo(dragX.value + amount) }
+                        }
+                        .padding(10.dp)
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(if (editing) 1.8f else 0.9f)
+                            .clip(RoundedCornerShape(34.dp))
+                            .background(Brush.linearGradient(listOf(Color(0xFF5BA3D0), Color(0xFFF2B38F))))
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = { if (!editing) toggle() },
+                                    onLongPress = {
+                                        if (!editing) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            showCoverSheet = true
+                                        }
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (c != null) {
+                            Image(
+                                bitmap = c,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                filterQuality = FilterQuality.High,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Text("♪", color = Color.White.copy(alpha = 0.6f), fontSize = 72.sp)
+                        }
+                        Text(flashIcon, color = Color.White, fontSize = 64.sp, modifier = Modifier.alpha(flash.value))
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    if (editing) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(34.dp))
+                                .background(Color.White.copy(alpha = 0.35f))
+                                .padding(16.dp)
+                        ) {
+                            GlassField(tTitle, { tTitle = it }, "ชื่อเพลง", 15.sp, true)
+                            Spacer(Modifier.height(8.dp))
+                            GlassField(tArtist, { tArtist = it }, "ชื่อศิลปิน", 14.sp, false)
+                            Spacer(Modifier.height(8.dp))
+                            GlassField(tAlbum, { tAlbum = it }, "ข้อความฝั่งขวา (เช่น อัลบั้ม)", 14.sp, false)
+                            Spacer(Modifier.height(12.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                Text(
+                                    "ยกเลิก",
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontSize = 15.sp,
+                                    modifier = Modifier
+                                        .clickable {
+                                            focus.clearFocus()
+                                            editing = false
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                                Text(
+                                    "บันทึก",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .clickable {
+                                            onUpdate(
+                                                index,
+                                                s.copy(
+                                                    title = tTitle.trim().ifBlank { s.title },
+                                                    artist = tArtist.trim(),
+                                                    album = tAlbum.trim()
+                                                )
+                                            )
+                                            focus.clearFocus()
+                                            editing = false
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(34.dp))
+                                .background(Color.White.copy(alpha = 0.35f))
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onTap = { toggle() },
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            editing = true
+                                        }
+                                    )
+                                }
+                                .padding(horizontal = 18.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    s.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    s.artist, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Column(
+                                Modifier.padding(horizontal = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    fmtTime(posMs), color = Color.White, fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp, fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    if (durMs > 0) "-" + fmtTime(durMs - posMs) else "--:--",
+                                    color = Color.White.copy(alpha = 0.75f),
+                                    fontSize = 11.sp, fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                                Text(
+                                    s.album, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                                    textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 }
-                .padding(10.dp)
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.9f)
-                    .clip(RoundedCornerShape(34.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF5BA3D0), Color(0xFFF2B38F)))),
-                contentAlignment = Alignment.Center
-            ) {
-                if (c != null) {
-                    Image(
-                        bitmap = c,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        filterQuality = FilterQuality.High,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Text("♪", color = Color.White.copy(alpha = 0.6f), fontSize = 72.sp)
-                }
-                Text(flashIcon, color = Color.White, fontSize = 64.sp, modifier = Modifier.alpha(flash.value))
             }
-            Spacer(Modifier.height(10.dp))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(34.dp))
-                    .background(Color.White.copy(alpha = 0.35f))
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        s.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        s.artist, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Column(
-                    Modifier.padding(horizontal = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+            if (showCoverSheet) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f))
+                        .pointerInput(Unit) { detectTapGestures { showCoverSheet = false } }
+                )
+                Glass(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    radius = 32.dp,
+                    dim = 0.35f
                 ) {
-                    Text(
-                        fmtTime(posMs), color = Color.White, fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp, fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        if (durMs > 0) "-" + fmtTime(durMs - posMs) else "--:--",
-                        color = Color.White.copy(alpha = 0.75f),
-                        fontSize = 11.sp, fontFamily = FontFamily.Monospace
-                    )
-                }
-                Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text(
-                        s.album, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
-                        textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
+                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                        SettingRow("เปลี่ยนรูปปก") {
+                            showCoverSheet = false
+                            coverPicker.launch(arrayOf("image/*"))
+                        }
+                        if (s.cover.isNotBlank()) {
+                            SettingRow("ใช้ปกในไฟล์เพลง") {
+                                showCoverSheet = false
+                                onUpdate(index, s.copy(cover = ""))
+                            }
+                        }
+                    }
                 }
             }
         }
