@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -142,7 +143,10 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
             try {
                 r.setDataSource(ctx, Uri.parse(s.uri))
                 r.embeddedPicture?.let {
-                    val o = BitmapFactory.Options().apply { inSampleSize = 2 }
+                    val bo = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(it, 0, it.size, bo)
+                    val ss = if (maxOf(bo.outWidth, bo.outHeight) > 2000) 2 else 1
+                    val o = BitmapFactory.Options().apply { inSampleSize = ss }
                     BitmapFactory.decodeByteArray(it, 0, it.size, o)?.let { bmp ->
                         prepareCover(bmp).asImageBitmap()
                     }
@@ -221,6 +225,7 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onClose: () -> Unit) {
                         bitmap = c,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
+                        filterQuality = FilterQuality.High,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
