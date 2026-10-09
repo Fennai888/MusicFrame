@@ -261,63 +261,76 @@ fun App() {
         LocalSoftBg provides bg?.soft,
         LocalScreenSize provides screen
     ) {
-        Box(Modifier.fillMaxSize().onSizeChanged { screen = it }) {
-            HomeBackground(bg)
-            if (songs.isEmpty()) {
-                EmptyCard { picker.launch(arrayOf("audio/*")) }
-            } else {
-                Library(songs) { playingIndex = it }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .onSizeChanged { screen = it }
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(if (showSettings) Modifier.blur(28.dp) else Modifier)
+            ) {
+                HomeBackground(bg)
+                if (songs.isEmpty()) {
+                    EmptyCard { picker.launch(arrayOf("audio/*")) }
+                } else {
+                    Library(songs) { playingIndex = it }
+                    Glass(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .navigationBarsPadding()
+                            .padding(24.dp)
+                            .size(64.dp),
+                        radius = 32.dp,
+                        contentAlignment = Alignment.Center,
+                        onClick = { picker.launch(arrayOf("audio/*")) }
+                    ) {
+                        Text("+", color = Color.White, fontSize = 32.sp)
+                    }
+                }
                 Glass(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .navigationBarsPadding()
-                        .padding(24.dp)
-                        .size(64.dp),
-                    radius = 32.dp,
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(16.dp)
+                        .size(44.dp),
+                    radius = 22.dp,
                     contentAlignment = Alignment.Center,
-                    onClick = { picker.launch(arrayOf("audio/*")) }
+                    dim = 0.2f,
+                    onClick = { showSettings = true }
                 ) {
-                    Text("+", color = Color.White, fontSize = 32.sp)
+                    Text("⚙", color = Color.White, fontSize = 20.sp)
                 }
-            }
-            Glass(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(16.dp)
-                    .size(44.dp),
-                radius = 22.dp,
-                contentAlignment = Alignment.Center,
-                dim = 0.2f,
-                onClick = { showSettings = true }
-            ) {
-                Text("⚙", color = Color.White, fontSize = 20.sp)
             }
             if (showSettings) {
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.35f))
+                        .background(Color.Black.copy(alpha = 0.15f))
                         .pointerInput(Unit) { detectTapGestures { showSettings = false } }
                 )
-                Glass(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(16.dp)
-                        .fillMaxWidth(),
-                    radius = 32.dp,
-                    dim = 0.35f
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                        SettingRow("เลือกรูปพื้นหลัง") {
-                            showSettings = false
-                            bgPicker.launch(arrayOf("image/*"))
-                        }
-                        if (bgUri != null) {
-                            SettingRow("ใช้พื้นหลังเดิม") {
+                CompositionLocalProvider(LocalSoftBg provides null) {
+                    Glass(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .padding(16.dp)
+                            .fillMaxWidth(),
+                        radius = 32.dp,
+                        dim = 0.35f
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                            SettingRow("เลือกรูปพื้นหลัง") {
                                 showSettings = false
-                                saveBg(null)
+                                bgPicker.launch(arrayOf("image/*"))
+                            }
+                            if (bgUri != null) {
+                                SettingRow("ใช้พื้นหลังเดิม") {
+                                    showSettings = false
+                                    saveBg(null)
+                                }
                             }
                         }
                     }
