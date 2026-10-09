@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
@@ -170,6 +171,7 @@ fun Glass(
     contentAlignment: Alignment = Alignment.TopStart,
     dim: Float = 0f,
     onClick: (() -> Unit)? = null,
+    backdrop: (@Composable () -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
     val soft = LocalSoftBg.current
@@ -188,7 +190,22 @@ fun Glass(
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
         contentAlignment = contentAlignment
     ) {
-        if (soft != null && screen.width > 0) {
+        if (backdrop != null && screen.width > 0) {
+            Box(Modifier.matchParentSize()) {
+                Box(
+                    Modifier
+                        .wrapContentSize(Alignment.TopStart, unbounded = true)
+                        .offset { IntOffset(-pos.x, -pos.y) }
+                        .requiredSize(
+                            with(density) { screen.width.toDp() },
+                            with(density) { screen.height.toDp() }
+                        )
+                        .blur(28.dp, BlurredEdgeTreatment.Unbounded)
+                ) {
+                    backdrop()
+                }
+            }
+        } else if (soft != null && screen.width > 0) {
             Box(Modifier.matchParentSize()) {
                 Image(
                     bitmap = soft,
@@ -227,6 +244,7 @@ fun App() {
     var showSettings by remember { mutableStateOf(false) }
     var screen by remember { mutableStateOf(IntSize.Zero) }
     val bg by rememberBackground(bgUri)
+    val gridState = rememberLazyGridState()
 
     fun saveBg(v: String?) {
         ctx.getSharedPreferences("settings", 0).edit().putString("bg", v).apply()
@@ -261,50 +279,43 @@ fun App() {
         LocalSoftBg provides bg?.soft,
         LocalScreenSize provides screen
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-                .onSizeChanged { screen = it }
-        ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .then(if (showSettings) Modifier.blur(28.dp) else Modifier)
-            ) {
-                HomeBackground(bg)
-                if (songs.isEmpty()) {
-                    EmptyCard { picker.launch(arrayOf("audio/*")) }
-                } else {
-                    Library(songs) { playingIndex = it }
-                    Glass(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .navigationBarsPadding()
-                            .padding(24.dp)
-                            .size(64.dp),
-                        radius = 32.dp,
-                        contentAlignment = Alignment.Center,
-                        onClick = { picker.launch(arrayOf("audio/*")) }
-                    ) {
-                        Text("+", color = Color.White, fontSize = 32.sp)
-                    }
-                }
+        Box(Modifier.fillMaxSize().onSizeChanged { screen = it }) {
+            HomeBackground(bg)
+            if (songs.isEmpty()) {
+                EmptyCard { picker.launch(arrayOf("audio/*")) }
+            } else {
+                Library(songs, gridState) { playingIndex = it }
                 Glass(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .statusBarsPadding()
-                        .padding(16.dp)
-                        .size(44.dp),
-                    radius = 22.dp,
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(24.dp)
+                        .size(64.dp),
+                    radius = 32.dp,
                     contentAlignment = Alignment.Center,
-                    dim = 0.2f,
-                    onClick = { showSettings = true }
+                    onClick = { picker.launch(arrayOf("audio/*")) }
                 ) {
-                    Text("⚙", color = Color.White, fontSize = 20.sp)
+                    Text("+", color = Color.White, fontSize = 32.sp)
                 }
             }
+            Glass(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(16.dp)
+                    .size(44.dp),
+                radius = 22.dp,
+                contentAlignment = Alignment.Center,
+                dim = 0.2f,
+                onClick = { showSettings = true }
+            ) {
+                Text("⚙", color = Color.White, fontSize = 20.sp)
+            }
             if (showSettings) {
+                val copyState = rememberLazyGridState(
+                    initialFirstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                    initialFirstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset
+                )
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -319,7 +330,15 @@ fun App() {
                             .padding(16.dp)
                             .fillMaxWidth(),
                         radius = 32.dp,
-                        dim = 0.35f
+                        dim = 0.30f,
+                        backdrop = {
+                            HomeBackground(bg)
+                            if (songs.isEmpty()) {
+                                EmptyCard { }
+                            } else {
+                                Library(songs, copyState) { }
+                            }
+                        }
                     ) {
                         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                             SettingRow("เลือกรูปพื้นหลัง") {
@@ -431,7 +450,7 @@ fun EmptyCard(onClick: () -> Unit) {
 }
 
 @Composable
-fun Library(songs: List<Song>, onPlay: (Int) -> Unit) {
+fun Library(songs: List<Song>, state: LazyGridState, onPlay: (Int) -> Unit) {
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Text(
             "เพลงของฉัน",
@@ -442,6 +461,7 @@ fun Library(songs: List<Song>, onPlay: (Int) -> Unit) {
         )
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
+            state = state,
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 120.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
