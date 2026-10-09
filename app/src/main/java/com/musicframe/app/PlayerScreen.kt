@@ -1,9 +1,13 @@
 package com.musicframe.app
 
+import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -49,9 +53,12 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -105,6 +112,18 @@ fun fmtTime(ms: Long): String {
     return "${t / 60}:${(t % 60).toString().padStart(2, '0')}"
 }
 
+fun mediaItemOf(s: Song): MediaItem = MediaItem.Builder()
+    .setUri(Uri.parse(s.uri))
+    .setMediaId(s.uri)
+    .setMediaMetadata(
+        MediaMetadata.Builder()
+            .setTitle(s.title)
+            .setArtist(s.artist)
+            .setAlbumTitle(s.album)
+            .build()
+    )
+    .build()
+
 @Composable
 fun GlassField(value: String, onChange: (String) -> Unit, hint: String, size: TextUnit, bold: Boolean) {
     BasicTextField(
@@ -138,22 +157,74 @@ fun GlassField(value: String, onChange: (String) -> Unit, hint: String, size: Te
 @Composable
 fun PlayerScreen(songs: List<Song>, startIndex: Int, onUpdate: (Int, Song) -> Unit, onClose: () -> Unit) {
     val ctx = LocalContext.current
+    var controller by remember { mutableStateOf<MediaController?>(null) }
+    val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val token = SessionToken(ctx, ComponentName(ctx, PlaybackService::class.java))
+        val future = MediaController.Builder(ctx, token).buildAsync()
+        future.addListener({
+            try {
+                controller = future.get()
+            } catch (e: Exception) {
+            }
+        }, ContextCompat.getMainExecutor(ctx))
+        onDispose {
+            controller = null
+            MediaController.releaseFuture(future)
+        }
+    }
+
+    val p = controller
+    BackHandler(enabled = p == null, onBack = onClose)
+    if (p == null) {
+        Box(Modifier.fillMaxSize().background(Color.Black))
+    } else {
+        PlayerContent(p, songs, startIndex, onUpdate, onClose)
+    }
+}
+
+@Composable
+fun PlayerContent(
+    player: Player,
+    songs: List<Song>,
+    startIndex: Int,
+    onUpdate: (Int, Song) -> Unit,
+    onClose: () -> Unit
+) {
+    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
     val focus = LocalFocusManager.current
-    val player = remember {
-        ExoPlayer.Builder(ctx).build().apply {
-            setMediaItems(songs.map { MediaItem.fromUri(Uri.parse(it.uri)) })
-            seekTo(startIndex, 0L)
-            prepare()
-            playWhenReady = true
-        }
-    }
     var index by remember { mutableIntStateOf(startIndex) }
     var posMs by remember { mutableLongStateOf(0L) }
     var durMs by remember { mutableLongStateOf(0L) }
     var editing by remember { mutableStateOf(false) }
     var showCoverSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(player) {
+        val ids = songs.map { it.uri }
+        val cur = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
+        if (cur != ids) {
+            player.setMediaItems(songs.map { mediaItemOf(it) }, startIndex, 0L)
+            player.prepare()
+            player.play()
+        } else {
+            if (player.currentMediaItemIndex != startIndex) {
+                player.seekTo(startIndex, 0L)
+            }
+            player.play()
+        }
+        index = player.currentMediaItemIndex
+    }
     DisposableEffect(player) {
         val l = object : Player.Listener {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
@@ -161,10 +232,7 @@ fun PlayerScreen(songs: List<Song>, startIndex: Int, onUpdate: (Int, Song) -> Un
             }
         }
         player.addListener(l)
-        onDispose {
-            player.removeListener(l)
-            player.release()
-        }
+        onDispose { player.removeListener(l) }
     }
     LaunchedEffect(player) {
         while (true) {
