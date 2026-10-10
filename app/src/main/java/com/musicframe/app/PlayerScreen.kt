@@ -289,6 +289,7 @@ fun PlayerContent(
     var tiltX by remember { mutableFloatStateOf(0f) }
     var tiltY by remember { mutableFloatStateOf(0f) }
     var vplayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    var bplayer by remember { mutableStateOf<ExoPlayer?>(null) }
     var vAspect by remember { mutableFloatStateOf(16f / 9f) }
     var resumed by remember { mutableStateOf(true) }
 
@@ -406,10 +407,12 @@ fun PlayerContent(
     DisposableEffect(spec.video) {
         if (spec.video.isBlank()) {
             vplayer = null
+            bplayer = null
             onDispose { }
         } else {
+            val item = MediaItem.fromUri(Uri.parse(spec.video))
             val ex = ExoPlayer.Builder(ctx).build()
-            ex.setMediaItem(MediaItem.fromUri(Uri.parse(spec.video)))
+            ex.setMediaItem(item)
             ex.repeatMode = Player.REPEAT_MODE_ONE
             ex.volume = 0f
             ex.addListener(object : Player.Listener {
@@ -421,10 +424,25 @@ fun PlayerContent(
             })
             ex.prepare()
             ex.playWhenReady = player.playWhenReady
+
+            val bx = ExoPlayer.Builder(ctx).build()
+            bx.setMediaItem(item)
+            bx.repeatMode = Player.REPEAT_MODE_ONE
+            bx.volume = 0f
+            bx.trackSelectionParameters = bx.trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                .build()
+            bx.prepare()
+            bx.playWhenReady = player.playWhenReady
+
             vplayer = ex
+            bplayer = bx
             onDispose {
                 vplayer = null
+                bplayer = null
                 ex.release()
+                bx.release()
             }
         }
     }
@@ -437,11 +455,18 @@ fun PlayerContent(
             v.volume = if (spec.sound) 1f else 0f
         }
     }
-    LaunchedEffect(vplayer, resumed) {
+    LaunchedEffect(vplayer, bplayer, resumed) {
         val v = vplayer ?: return@LaunchedEffect
+        val b = bplayer
         while (true) {
             val want = resumed && player.playWhenReady && player.playbackState != Player.STATE_ENDED
             if (v.playWhenReady != want) v.playWhenReady = want
+            if (b != null) {
+                if (b.playWhenReady != want) b.playWhenReady = want
+                if (want && abs(b.currentPosition - v.currentPosition) > 600) {
+                    b.seekTo(v.currentPosition)
+                }
+            }
             delay(200)
         }
     }
@@ -501,6 +526,17 @@ fun PlayerContent(
                         .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
                         .blur(24.dp, BlurredEdgeTreatment.Unbounded)
                 )
+                val bp = bplayer
+                if (bp != null) {
+                    VideoFill(
+                        bp,
+                        vAspect,
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                            .blur(24.dp, BlurredEdgeTreatment.Unbounded)
+                    )
+                }
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
             } else {
                 Backdrop()
