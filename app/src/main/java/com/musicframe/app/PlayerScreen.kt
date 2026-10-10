@@ -13,6 +13,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Build
+import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,19 +63,27 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import kotlinx.coroutines.Dispatchers
@@ -193,6 +202,33 @@ fun GlassField(value: String, onChange: (String) -> Unit, hint: String, size: Te
 }
 
 @Composable
+fun VideoFill(vp: ExoPlayer, aspect: Float, modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val boxAr = maxWidth / maxHeight
+        val w: Dp
+        val h: Dp
+        if (aspect > boxAr) {
+            h = maxHeight
+            w = maxHeight * aspect
+        } else {
+            w = maxWidth
+            h = maxWidth / aspect
+        }
+        AndroidView(
+            factory = { TextureView(it) },
+            update = { tv -> vp.setVideoTextureView(tv) },
+            onRelease = { tv ->
+                try {
+                    vp.clearVideoTextureView(tv)
+                } catch (e: Exception) {
+                }
+            },
+            modifier = Modifier.requiredSize(w, h)
+        )
+    }
+}
+
+@Composable
 fun PlayerScreen(songs: List<Song>, startIndex: Int, onUpdate: (Int, Song) -> Unit, onClose: () -> Unit) {
     val ctx = LocalContext.current
     var controller by remember { mutableStateOf<MediaController?>(null) }
@@ -252,6 +288,9 @@ fun PlayerContent(
     var seekFrac by remember { mutableFloatStateOf(0f) }
     var tiltX by remember { mutableFloatStateOf(0f) }
     var tiltY by remember { mutableFloatStateOf(0f) }
+    var vplayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    var vAspect by remember { mutableFloatStateOf(16f / 9f) }
+    var resumed by remember { mutableStateOf(true) }
 
     LaunchedEffect(player) {
         val ids = songs.map { it.uri }
@@ -316,6 +355,18 @@ fun PlayerContent(
         if (acc != null) sm.registerListener(l, acc, SensorManager.SENSOR_DELAY_UI)
         onDispose { sm.unregisterListener(l) }
     }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_STOP) {
+                resumed = false
+            } else if (e == Lifecycle.Event.ON_START) {
+                resumed = true
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     BackHandler(enabled = !editing && !showCoverSheet && !showList, onBack = onClose)
     BackHandler(enabled = editing) { editing = false }
     BackHandler(enabled = showCoverSheet) { showCoverSheet = false }
@@ -327,7 +378,22 @@ fun PlayerContent(
                 ctx.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (e: Exception) {
             }
-            songs.getOrNull(index)?.let { onUpdate(index, it.copy(cover = u.toString())) }
+            songs.getOrNull(index)?.let {
+                val sp = parseCover(it.cover)
+                onUpdate(index, it.copy(cover = buildCover(sp.copy(image = u.toString()))))
+            }
+        }
+    }
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u ->
+        if (u != null) {
+            try {
+                ctx.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {
+            }
+            songs.getOrNull(index)?.let {
+                val sp = parseCover(it.cover)
+                onUpdate(index, it.copy(cover = buildCover(sp.copy(video = u.toString()))))
+            }
         }
     }
 
@@ -335,6 +401,50 @@ fun PlayerContent(
     var flashIcon by remember { mutableStateOf("▶") }
     val dragX = remember { Animatable(0f) }
     val s = songs.getOrNull(index) ?: return
+    val spec = parseCover(s.cover)
+
+    DisposableEffect(spec.video) {
+        if (spec.video.isBlank()) {
+            vplayer = null
+            onDispose { }
+        } else {
+            val ex = ExoPlayer.Builder(ctx).build()
+            ex.setMediaItem(MediaItem.fromUri(Uri.parse(spec.video)))
+            ex.repeatMode = Player.REPEAT_MODE_ONE
+            ex.volume = 0f
+            ex.addListener(object : Player.Listener {
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    if (videoSize.width > 0 && videoSize.height > 0) {
+                        vAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
+                    }
+                }
+            })
+            ex.prepare()
+            ex.playWhenReady = player.playWhenReady
+            vplayer = ex
+            onDispose {
+                vplayer = null
+                ex.release()
+            }
+        }
+    }
+    LaunchedEffect(vplayer, spec.sound) {
+        vplayer?.let { v ->
+            v.trackSelectionParameters = v.trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !spec.sound)
+                .build()
+            v.volume = if (spec.sound) 1f else 0f
+        }
+    }
+    LaunchedEffect(vplayer, resumed) {
+        val v = vplayer ?: return@LaunchedEffect
+        while (true) {
+            val want = resumed && player.playWhenReady && player.playbackState != Player.STATE_ENDED
+            if (v.playWhenReady != want) v.playWhenReady = want
+            delay(200)
+        }
+    }
 
     var tTitle by remember(editing) { mutableStateOf(s.title) }
     var tArtist by remember(editing) { mutableStateOf(s.artist) }
@@ -505,6 +615,10 @@ fun PlayerContent(
                         } else {
                             Text("♪", color = Color.White.copy(alpha = 0.6f), fontSize = 72.sp)
                         }
+                        val vp = vplayer
+                        if (vp != null) {
+                            VideoFill(vp, vAspect, Modifier.fillMaxSize())
+                        }
                         Text(flashIcon, color = Color.White, fontSize = 56.sp, modifier = Modifier.alpha(flash.value))
                     }
                     Spacer(Modifier.height(10.dp))
@@ -664,10 +778,26 @@ fun PlayerContent(
                             showCoverSheet = false
                             coverPicker.launch(arrayOf("image/*"))
                         }
-                        if (s.cover.isNotBlank()) {
+                        if (spec.image.isNotBlank()) {
                             SettingRow("ใช้ปกในไฟล์เพลง") {
                                 showCoverSheet = false
-                                onUpdate(index, s.copy(cover = ""))
+                                onUpdate(index, s.copy(cover = buildCover(spec.copy(image = ""))))
+                            }
+                        }
+                        SettingRow(if (spec.video.isBlank()) "ใส่วิดีโอ" else "เปลี่ยนวิดีโอ") {
+                            showCoverSheet = false
+                            videoPicker.launch(arrayOf("video/*"))
+                        }
+                        if (spec.video.isNotBlank()) {
+                            SettingRow(
+                                "เสียงวิดีโอ: " + (if (spec.sound) "เปิด" else "ปิด") + " (แตะเพื่อสลับ)"
+                            ) {
+                                showCoverSheet = false
+                                onUpdate(index, s.copy(cover = buildCover(spec.copy(sound = !spec.sound))))
+                            }
+                            SettingRow("เอาวิดีโอออก", Color(0xFFFF6B6B)) {
+                                showCoverSheet = false
+                                onUpdate(index, s.copy(cover = buildCover(spec.copy(video = "", sound = false))))
                             }
                         }
                     }
