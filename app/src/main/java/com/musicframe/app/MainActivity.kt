@@ -1,5 +1,6 @@
 package com.musicframe.app
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -40,10 +42,14 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import androidx.core.content.ContextCompat
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -114,6 +120,22 @@ fun readSong(c: Context, uri: Uri): Song {
     return Song(uri.toString(), title ?: "ไม่มีชื่อเพลง", artist ?: "", album ?: "")
 }
 
+fun stopIfPlaying(ctx: Context, uri: String) {
+    val token = SessionToken(ctx, ComponentName(ctx, PlaybackService::class.java))
+    val f = MediaController.Builder(ctx, token).buildAsync()
+    f.addListener({
+        try {
+            val c = f.get()
+            if (c.currentMediaItem?.mediaId == uri) {
+                c.stop()
+                c.clearMediaItems()
+            }
+        } catch (e: Exception) {
+        }
+        MediaController.releaseFuture(f)
+    }, ContextCompat.getMainExecutor(ctx))
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -171,23 +193,42 @@ fun Glass(
     contentAlignment: Alignment = Alignment.TopStart,
     dim: Float = 0f,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     backdrop: (@Composable () -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
     val soft = LocalSoftBg.current
     val screen = LocalScreenSize.current
     val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
+    val clickState by rememberUpdatedState(onClick)
+    val longState by rememberUpdatedState(onLongClick)
     var pos by remember { mutableStateOf(IntOffset.Zero) }
     val shape = RoundedCornerShape(radius)
     val hasBlur = soft != null && screen.width > 0
     val dark = dim > 0f
     val a1 = if (dark) 0.08f else if (hasBlur) 0.22f else 0.30f
     val a2 = if (dark) 0.03f else if (hasBlur) 0.08f else 0.12f
+    val tapModifier = if (onLongClick != null) {
+        Modifier.pointerInput(Unit) {
+            detectTapGestures(
+                onTap = { clickState?.invoke() },
+                onLongPress = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    longState?.invoke()
+                }
+            )
+        }
+    } else if (onClick != null) {
+        Modifier.clickable { onClick() }
+    } else {
+        Modifier
+    }
     Box(
         modifier
             .onGloballyPositioned { pos = it.positionInRoot().round() }
             .clip(shape)
-            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
+            .then(tapModifier),
         contentAlignment = contentAlignment
     ) {
         if (backdrop != null && screen.width > 0) {
@@ -242,13 +283,29 @@ fun App() {
     var playingIndex by remember { mutableStateOf<Int?>(null) }
     var bgUri by remember { mutableStateOf(ctx.getSharedPreferences("settings", 0).getString("bg", null)) }
     var showSettings by remember { mutableStateOf(false) }
+    var deleteIndex by remember { mutableStateOf<Int?>(null) }
     var screen by remember { mutableStateOf(IntSize.Zero) }
     val bg by rememberBackground(bgUri)
     val gridState = rememberLazyGridState()
+    val sheetOpen = showSettings || deleteIndex != null
 
     fun saveBg(v: String?) {
         ctx.getSharedPreferences("settings", 0).edit().putString("bg", v).apply()
         bgUri = v
+    }
+
+    fun deleteSong(i: Int) {
+        val removed = songs.getOrNull(i) ?: return
+        songs = songs.filterIndexed { idx, _ -> idx != i }
+        Store.save(ctx, songs)
+        try {
+            ctx.contentResolver.releasePersistableUriPermission(
+                Uri.parse(removed.uri),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+        }
+        stopIfPlaying(ctx, removed.uri)
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -273,7 +330,10 @@ fun App() {
             saveBg(u.toString())
         }
     }
-    BackHandler(enabled = showSettings) { showSettings = false }
+    BackHandler(enabled = sheetOpen) {
+        showSettings = false
+        deleteIndex = null
+    }
 
     CompositionLocalProvider(
         LocalSoftBg provides bg?.soft,
@@ -284,7 +344,7 @@ fun App() {
             if (songs.isEmpty()) {
                 EmptyCard { picker.launch(arrayOf("audio/*")) }
             } else {
-                Library(songs, gridState) { playingIndex = it }
+                Library(songs, gridState, onMore = { deleteIndex = it }) { playingIndex = it }
                 Glass(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -311,7 +371,7 @@ fun App() {
             ) {
                 Text("⚙", color = Color.White, fontSize = 20.sp)
             }
-            if (showSettings) {
+            if (sheetOpen) {
                 val copyState = rememberLazyGridState(
                     initialFirstVisibleItemIndex = gridState.firstVisibleItemIndex,
                     initialFirstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset
@@ -320,7 +380,12 @@ fun App() {
                     Modifier
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.15f))
-                        .pointerInput(Unit) { detectTapGestures { showSettings = false } }
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                showSettings = false
+                                deleteIndex = null
+                            }
+                        }
                 )
                 CompositionLocalProvider(LocalSoftBg provides null) {
                     Glass(
@@ -336,19 +401,43 @@ fun App() {
                             if (songs.isEmpty()) {
                                 EmptyCard { }
                             } else {
-                                Library(songs, copyState) { }
+                                Library(songs, copyState, onMore = { }) { }
                             }
                         }
                     ) {
                         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                            SettingRow("เลือกรูปพื้นหลัง") {
-                                showSettings = false
-                                bgPicker.launch(arrayOf("image/*"))
-                            }
-                            if (bgUri != null) {
-                                SettingRow("ใช้พื้นหลังเดิม") {
+                            val di = deleteIndex
+                            val target = if (di != null) songs.getOrNull(di) else null
+                            if (target != null && di != null) {
+                                Text(
+                                    target.title,
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)
+                                )
+                                SettingRow("ลบเพลงนี้ออกจากไลบรารี", Color(0xFFFF6B6B)) {
+                                    deleteSong(di)
+                                    deleteIndex = null
+                                }
+                                Text(
+                                    "ไฟล์เพลงในเครื่องจะไม่ถูกลบ",
+                                    color = Color.White.copy(alpha = 0.5f),
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(horizontal = 24.dp)
+                                )
+                                SettingRow("ยกเลิก") { deleteIndex = null }
+                            } else if (showSettings) {
+                                SettingRow("เลือกรูปพื้นหลัง") {
                                     showSettings = false
-                                    saveBg(null)
+                                    bgPicker.launch(arrayOf("image/*"))
+                                }
+                                if (bgUri != null) {
+                                    SettingRow("ใช้พื้นหลังเดิม") {
+                                        showSettings = false
+                                        saveBg(null)
+                                    }
                                 }
                             }
                         }
@@ -371,10 +460,10 @@ fun App() {
 }
 
 @Composable
-fun SettingRow(text: String, onClick: () -> Unit) {
+fun SettingRow(text: String, color: Color = Color.White, onClick: () -> Unit) {
     Text(
         text,
-        color = Color.White,
+        color = color,
         fontSize = 17.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier
@@ -450,7 +539,12 @@ fun EmptyCard(onClick: () -> Unit) {
 }
 
 @Composable
-fun Library(songs: List<Song>, state: LazyGridState, onPlay: (Int) -> Unit) {
+fun Library(
+    songs: List<Song>,
+    state: LazyGridState,
+    onMore: (Int) -> Unit,
+    onPlay: (Int) -> Unit
+) {
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Text(
             "เพลงของฉัน",
@@ -466,19 +560,21 @@ fun Library(songs: List<Song>, state: LazyGridState, onPlay: (Int) -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            itemsIndexed(songs) { i, s -> MiniCard(s) { onPlay(i) } }
+            itemsIndexed(songs, key = { _, s -> s.uri }) { i, s ->
+                MiniCard(s, onLongClick = { onMore(i) }) { onPlay(i) }
+            }
         }
     }
 }
 
 @Composable
-fun MiniCard(s: Song, onClick: () -> Unit) {
+fun MiniCard(s: Song, onLongClick: () -> Unit, onClick: () -> Unit) {
     val ctx = LocalContext.current
     val thumb by produceState<ImageBitmap?>(null, s.uri, s.cover) {
         value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 600)?.asImageBitmap() }
     }
     val t = thumb
-    Glass(Modifier.fillMaxWidth(), radius = 24.dp, onClick = onClick) {
+    Glass(Modifier.fillMaxWidth(), radius = 24.dp, onClick = onClick, onLongClick = onLongClick) {
         Column(Modifier.fillMaxWidth().padding(8.dp)) {
             Box(
                 Modifier
