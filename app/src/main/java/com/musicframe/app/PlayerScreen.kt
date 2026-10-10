@@ -2,10 +2,15 @@ package com.musicframe.app
 
 import android.Manifest
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -36,6 +41,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -75,6 +81,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -125,7 +132,24 @@ fun fmtTime(ms: Long): String {
     return "${t / 60}:${(t % 60).toString().padStart(2, '0')}"
 }
 
-fun mediaItemOf(s: Song): MediaItem = MediaItem.Builder()
+fun artFile(ctx: Context, s: Song): File {
+    val dir = File(ctx.cacheDir, "art")
+    dir.mkdirs()
+    return File(dir, (s.uri + "|" + s.cover).hashCode().toUInt().toString(16) + ".jpg")
+}
+
+fun ensureArt(ctx: Context, s: Song) {
+    val f = artFile(ctx, s)
+    if (f.exists()) return
+    val b = Covers.load(ctx, s, 512) ?: return
+    try {
+        f.outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+    } catch (e: Exception) {
+        f.delete()
+    }
+}
+
+fun mediaItemOf(ctx: Context, s: Song): MediaItem = MediaItem.Builder()
     .setUri(Uri.parse(s.uri))
     .setMediaId(s.uri)
     .setMediaMetadata(
@@ -133,6 +157,7 @@ fun mediaItemOf(s: Song): MediaItem = MediaItem.Builder()
             .setTitle(s.title)
             .setArtist(s.artist)
             .setAlbumTitle(s.album)
+            .setArtworkUri(Uri.fromFile(artFile(ctx, s)))
             .build()
     )
     .build()
@@ -225,12 +250,17 @@ fun PlayerContent(
     var showList by remember { mutableStateOf(false) }
     var seeking by remember { mutableStateOf(false) }
     var seekFrac by remember { mutableFloatStateOf(0f) }
+    var tiltX by remember { mutableFloatStateOf(0f) }
+    var tiltY by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(player) {
         val ids = songs.map { it.uri }
         val cur = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
         if (cur != ids) {
-            player.setMediaItems(songs.map { mediaItemOf(it) }, startIndex, 0L)
+            withContext(Dispatchers.IO) {
+                songs.getOrNull(startIndex)?.let { ensureArt(ctx, it) }
+            }
+            player.setMediaItems(songs.map { mediaItemOf(ctx, it) }, startIndex, 0L)
             player.prepare()
             player.play()
         } else {
@@ -240,6 +270,9 @@ fun PlayerContent(
             player.play()
         }
         index = player.currentMediaItemIndex
+        launch(Dispatchers.IO) {
+            songs.forEach { ensureArt(ctx, it) }
+        }
     }
     DisposableEffect(player) {
         val l = object : Player.Listener {
@@ -256,6 +289,32 @@ fun PlayerContent(
             durMs = player.duration.coerceAtLeast(0L)
             delay(250)
         }
+    }
+    DisposableEffect(Unit) {
+        val sm = ctx.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val acc = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        var bx = Float.NaN
+        var by = 0f
+        val l = object : SensorEventListener {
+            override fun onSensorChanged(e: SensorEvent) {
+                val x = e.values[0]
+                val y = e.values[1]
+                if (bx.isNaN()) {
+                    bx = x
+                    by = y
+                }
+                val nx = ((x - bx) / 4f).coerceIn(-1f, 1f)
+                val ny = ((y - by) / 4f).coerceIn(-1f, 1f)
+                tiltX += (nx - tiltX) * 0.12f
+                tiltY += (ny - tiltY) * 0.12f
+                bx += (x - bx) * 0.01f
+                by += (y - by) * 0.01f
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        if (acc != null) sm.registerListener(l, acc, SensorManager.SENSOR_DELAY_UI)
+        onDispose { sm.unregisterListener(l) }
     }
     BackHandler(enabled = !editing && !showCoverSheet && !showList, onBack = onClose)
     BackHandler(enabled = editing) { editing = false }
@@ -329,8 +388,8 @@ fun PlayerContent(
                     colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
                     modifier = Modifier
                         .fillMaxSize()
-                        .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
-                        .blur(60.dp, BlurredEdgeTreatment.Unbounded)
+                        .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                        .blur(24.dp, BlurredEdgeTreatment.Unbounded)
                 )
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
             } else {
@@ -351,6 +410,15 @@ fun PlayerContent(
                         )
                         .drawWithContent {
                             drawContent()
+                            val shine = Brush.radialGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.18f), Color.Transparent),
+                                center = Offset(
+                                    size.width * (0.5f + tiltX * 0.8f),
+                                    size.height * (0.4f + tiltY * 0.5f)
+                                ),
+                                radius = size.width * 0.8f
+                            )
+                            drawRect(shine)
                             val inset = 2.dp.toPx()
                             val rad = 44.dp.toPx() - inset
                             val path = Path().apply {
