@@ -12,13 +12,18 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
@@ -29,14 +34,21 @@ import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -63,6 +75,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 fun trimBorders(b: Bitmap): Bitmap {
@@ -209,6 +222,9 @@ fun PlayerContent(
     var durMs by remember { mutableLongStateOf(0L) }
     var editing by remember { mutableStateOf(false) }
     var showCoverSheet by remember { mutableStateOf(false) }
+    var showList by remember { mutableStateOf(false) }
+    var seeking by remember { mutableStateOf(false) }
+    var seekFrac by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(player) {
         val ids = songs.map { it.uri }
@@ -241,9 +257,10 @@ fun PlayerContent(
             delay(250)
         }
     }
-    BackHandler(enabled = !editing && !showCoverSheet, onBack = onClose)
+    BackHandler(enabled = !editing && !showCoverSheet && !showList, onBack = onClose)
     BackHandler(enabled = editing) { editing = false }
     BackHandler(enabled = showCoverSheet) { showCoverSheet = false }
+    BackHandler(enabled = showList) { showList = false }
 
     val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u ->
         if (u != null) {
@@ -269,13 +286,37 @@ fun PlayerContent(
     }
     val c = cover
 
-    fun toggle() {
-        if (player.playWhenReady) player.pause() else player.play()
-        flashIcon = if (player.playWhenReady) "▶" else "❚❚"
+    val glowFrac by animateFloatAsState(
+        targetValue = if (durMs > 0) {
+            (if (seeking) seekFrac else posMs.toFloat() / durMs).coerceIn(0f, 1f)
+        } else {
+            0f
+        },
+        animationSpec = tween(250, easing = LinearEasing),
+        label = "glow"
+    )
+    val shownPos = if (seeking && durMs > 0) (seekFrac * durMs).toLong() else posMs
+
+    fun showFlash(label: String) {
+        flashIcon = label
         scope.launch {
             flash.snapTo(1f)
             flash.animateTo(0f, tween(700))
         }
+    }
+
+    fun toggle() {
+        if (player.playWhenReady) player.pause() else player.play()
+        showFlash(if (player.playWhenReady) "▶" else "❚❚")
+    }
+
+    fun seekBy(ms: Long, label: String) {
+        val d = player.duration
+        var t = player.currentPosition + ms
+        if (t < 0) t = 0
+        if (d > 0 && t > d - 500) t = (d - 500).coerceAtLeast(0)
+        player.seekTo(t)
+        showFlash(label)
     }
 
     CompositionLocalProvider(LocalSoftBg provides null) {
@@ -302,7 +343,40 @@ fun PlayerContent(
                         .fillMaxWidth()
                         .padding(horizontal = 28.dp)
                         .offset { IntOffset(dragX.value.roundToInt(), 0) }
-                        .glass(44.dp)
+                        .clip(RoundedCornerShape(44.dp))
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.12f))
+                            )
+                        )
+                        .drawWithContent {
+                            drawContent()
+                            val inset = 2.dp.toPx()
+                            val rad = 44.dp.toPx() - inset
+                            val path = Path().apply {
+                                addRoundRect(
+                                    RoundRect(
+                                        inset,
+                                        inset,
+                                        size.width - inset,
+                                        size.height - inset,
+                                        CornerRadius(rad, rad)
+                                    )
+                                )
+                            }
+                            drawPath(path, Color.White.copy(alpha = 0.10f), style = Stroke(width = 1.5.dp.toPx()))
+                            if (glowFrac > 0f) {
+                                val pm = PathMeasure()
+                                pm.setPath(path, false)
+                                val seg = Path()
+                                pm.getSegment(0f, pm.length * glowFrac, seg, true)
+                                drawPath(
+                                    seg,
+                                    Color.White.copy(alpha = 0.95f),
+                                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+                                )
+                            }
+                        }
                         .pointerInput(Unit) {
                             detectHorizontalDragGestures(
                                 onDragEnd = {
@@ -335,6 +409,13 @@ fun PlayerContent(
                             .pointerInput(Unit) {
                                 detectTapGestures(
                                     onTap = { if (!editing) toggle() },
+                                    onDoubleTap = { off ->
+                                        if (!editing) {
+                                            val w = size.width
+                                            if (off.x < w * 0.35f) seekBy(-10_000L, "−10s")
+                                            else if (off.x > w * 0.65f) seekBy(10_000L, "+10s")
+                                        }
+                                    },
                                     onLongPress = {
                                         if (!editing) {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -356,7 +437,7 @@ fun PlayerContent(
                         } else {
                             Text("♪", color = Color.White.copy(alpha = 0.6f), fontSize = 72.sp)
                         }
-                        Text(flashIcon, color = Color.White, fontSize = 64.sp, modifier = Modifier.alpha(flash.value))
+                        Text(flashIcon, color = Color.White, fontSize = 56.sp, modifier = Modifier.alpha(flash.value))
                     }
                     Spacer(Modifier.height(10.dp))
                     if (editing) {
@@ -422,6 +503,41 @@ fun PlayerContent(
                                         }
                                     )
                                 }
+                                .pointerInput(Unit) {
+                                    var mode = 0
+                                    var ax = 0f
+                                    var ay = 0f
+                                    detectDragGestures(
+                                        onDragStart = {
+                                            mode = 0
+                                            ax = 0f
+                                            ay = 0f
+                                        },
+                                        onDragEnd = {
+                                            if (mode == 1) {
+                                                if (durMs > 0) player.seekTo((seekFrac * durMs).toLong())
+                                            } else if (mode == 2 && ay < -80f) {
+                                                showList = true
+                                            }
+                                            seeking = false
+                                        },
+                                        onDragCancel = { seeking = false }
+                                    ) { change, d ->
+                                        change.consume()
+                                        ax += d.x
+                                        ay += d.y
+                                        if (mode == 0 && (abs(ax) > 12f || abs(ay) > 12f)) {
+                                            mode = if (abs(ax) >= abs(ay)) 1 else 2
+                                            if (mode == 1) {
+                                                seeking = true
+                                                seekFrac = if (durMs > 0) posMs.toFloat() / durMs else 0f
+                                            }
+                                        }
+                                        if (mode == 1) {
+                                            seekFrac = (seekFrac + d.x / size.width).coerceIn(0f, 1f)
+                                        }
+                                    }
+                                }
                                 .padding(horizontal = 18.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -440,11 +556,11 @@ fun PlayerContent(
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(
-                                    fmtTime(posMs), color = Color.White, fontWeight = FontWeight.Bold,
+                                    fmtTime(shownPos), color = Color.White, fontWeight = FontWeight.Bold,
                                     fontSize = 16.sp, fontFamily = FontFamily.Monospace
                                 )
                                 Text(
-                                    if (durMs > 0) "-" + fmtTime(durMs - posMs) else "--:--",
+                                    if (durMs > 0) "-" + fmtTime(durMs - shownPos) else "--:--",
                                     color = Color.White.copy(alpha = 0.75f),
                                     fontSize = 11.sp, fontFamily = FontFamily.Monospace
                                 )
@@ -484,6 +600,61 @@ fun PlayerContent(
                             SettingRow("ใช้ปกในไฟล์เพลง") {
                                 showCoverSheet = false
                                 onUpdate(index, s.copy(cover = ""))
+                            }
+                        }
+                    }
+                }
+            }
+            if (showList) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f))
+                        .pointerInput(Unit) { detectTapGestures { showList = false } }
+                )
+                Glass(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    radius = 32.dp,
+                    dim = 0.35f
+                ) {
+                    LazyColumn(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp)
+                            .padding(vertical = 8.dp)
+                    ) {
+                        itemsIndexed(songs) { i, sg ->
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        player.seekTo(i, 0L)
+                                        player.play()
+                                        showList = false
+                                    }
+                                    .padding(horizontal = 24.dp, vertical = 12.dp)
+                            ) {
+                                Text(
+                                    (if (i == index) "▶  " else "") + sg.title,
+                                    color = Color.White,
+                                    fontWeight = if (i == index) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 15.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (sg.artist.isNotBlank()) {
+                                    Text(
+                                        sg.artist,
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
