@@ -202,7 +202,12 @@ fun GlassField(value: String, onChange: (String) -> Unit, hint: String, size: Te
 }
 
 @Composable
-fun VideoFill(vp: ExoPlayer, aspect: Float, modifier: Modifier = Modifier) {
+fun VideoFill(
+    vp: ExoPlayer,
+    aspect: Float,
+    modifier: Modifier = Modifier,
+    onView: ((TextureView) -> Unit)? = null
+) {
     BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
         val boxAr = maxWidth / maxHeight
         val w: Dp
@@ -215,7 +220,9 @@ fun VideoFill(vp: ExoPlayer, aspect: Float, modifier: Modifier = Modifier) {
             h = maxWidth / aspect
         }
         AndroidView(
-            factory = { TextureView(it) },
+            factory = { ctx ->
+                TextureView(ctx).also { v -> onView?.invoke(v) }
+            },
             update = { tv -> vp.setVideoTextureView(tv) },
             onRelease = { tv ->
                 try {
@@ -289,7 +296,9 @@ fun PlayerContent(
     var tiltX by remember { mutableFloatStateOf(0f) }
     var tiltY by remember { mutableFloatStateOf(0f) }
     var vplayer by remember { mutableStateOf<ExoPlayer?>(null) }
-    var bplayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    var vTexture by remember { mutableStateOf<TextureView?>(null) }
+    var vFrame by remember { mutableStateOf<ImageBitmap?>(null) }
+    var vReady by remember { mutableStateOf(false) }
     var vAspect by remember { mutableFloatStateOf(16f / 9f) }
     var resumed by remember { mutableStateOf(true) }
 
@@ -405,14 +414,14 @@ fun PlayerContent(
     val spec = parseCover(s.cover)
 
     DisposableEffect(spec.video) {
+        vReady = false
+        vFrame = null
         if (spec.video.isBlank()) {
             vplayer = null
-            bplayer = null
             onDispose { }
         } else {
-            val item = MediaItem.fromUri(Uri.parse(spec.video))
             val ex = ExoPlayer.Builder(ctx).build()
-            ex.setMediaItem(item)
+            ex.setMediaItem(MediaItem.fromUri(Uri.parse(spec.video)))
             ex.repeatMode = Player.REPEAT_MODE_ONE
             ex.volume = 0f
             ex.addListener(object : Player.Listener {
@@ -421,28 +430,20 @@ fun PlayerContent(
                         vAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
                     }
                 }
+
+                override fun onRenderedFirstFrame() {
+                    vReady = true
+                }
             })
             ex.prepare()
             ex.playWhenReady = player.playWhenReady
-
-            val bx = ExoPlayer.Builder(ctx).build()
-            bx.setMediaItem(item)
-            bx.repeatMode = Player.REPEAT_MODE_ONE
-            bx.volume = 0f
-            bx.trackSelectionParameters = bx.trackSelectionParameters
-                .buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
-                .build()
-            bx.prepare()
-            bx.playWhenReady = player.playWhenReady
-
             vplayer = ex
-            bplayer = bx
             onDispose {
                 vplayer = null
-                bplayer = null
+                vTexture = null
+                vFrame = null
+                vReady = false
                 ex.release()
-                bx.release()
             }
         }
     }
@@ -455,19 +456,30 @@ fun PlayerContent(
             v.volume = if (spec.sound) 1f else 0f
         }
     }
-    LaunchedEffect(vplayer, bplayer, resumed) {
+    LaunchedEffect(vplayer, resumed) {
         val v = vplayer ?: return@LaunchedEffect
-        val b = bplayer
         while (true) {
             val want = resumed && player.playWhenReady && player.playbackState != Player.STATE_ENDED
             if (v.playWhenReady != want) v.playWhenReady = want
-            if (b != null) {
-                if (b.playWhenReady != want) b.playWhenReady = want
-                if (want && abs(b.currentPosition - v.currentPosition) > 600) {
-                    b.seekTo(v.currentPosition)
+            delay(200)
+        }
+    }
+    LaunchedEffect(vTexture, vplayer, vReady, resumed) {
+        val tv = vTexture
+        val vp = vplayer
+        if (tv == null || vp == null || !vReady || !resumed) return@LaunchedEffect
+        while (true) {
+            if (tv.isAvailable) {
+                val bw = 240
+                val bh = (bw / vAspect).roundToInt().coerceAtLeast(16)
+                val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+                try {
+                    tv.getBitmap(b)
+                    vFrame = b.asImageBitmap()
+                } catch (e: Exception) {
                 }
             }
-            delay(200)
+            delay(if (vp.isPlaying) 50L else 300L)
         }
     }
 
@@ -524,17 +536,20 @@ fun PlayerContent(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                        .blur(24.dp, BlurredEdgeTreatment.Unbounded)
+                        .blur(16.dp, BlurredEdgeTreatment.Unbounded)
                 )
-                val bp = bplayer
-                if (bp != null) {
-                    VideoFill(
-                        bp,
-                        vAspect,
-                        Modifier
+                val fr = vFrame
+                if (fr != null && vplayer != null) {
+                    Image(
+                        bitmap = fr,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        filterQuality = FilterQuality.Medium,
+                        colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+                        modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                            .blur(24.dp, BlurredEdgeTreatment.Unbounded)
+                            .blur(16.dp, BlurredEdgeTreatment.Unbounded)
                     )
                 }
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
@@ -653,7 +668,7 @@ fun PlayerContent(
                         }
                         val vp = vplayer
                         if (vp != null) {
-                            VideoFill(vp, vAspect, Modifier.fillMaxSize())
+                            VideoFill(vp, vAspect, Modifier.fillMaxSize(), onView = { vTexture = it })
                         }
                         Text(flashIcon, color = Color.White, fontSize = 56.sp, modifier = Modifier.alpha(flash.value))
                     }
