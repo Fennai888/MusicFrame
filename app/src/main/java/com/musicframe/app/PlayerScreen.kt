@@ -220,10 +220,11 @@ fun VideoFill(
             h = maxWidth / aspect
         }
         AndroidView(
-            factory = { ctx ->
-                TextureView(ctx).also { v -> onView?.invoke(v) }
+            factory = { ctx -> TextureView(ctx) },
+            update = { tv ->
+                vp.setVideoTextureView(tv)
+                onView?.invoke(tv)
             },
-            update = { tv -> vp.setVideoTextureView(tv) },
             onRelease = { tv ->
                 try {
                     vp.clearVideoTextureView(tv)
@@ -296,9 +297,8 @@ fun PlayerContent(
     var tiltX by remember { mutableFloatStateOf(0f) }
     var tiltY by remember { mutableFloatStateOf(0f) }
     var vplayer by remember { mutableStateOf<ExoPlayer?>(null) }
-    var vTexture by remember { mutableStateOf<TextureView?>(null) }
+    val tvHolder = remember { arrayOfNulls<TextureView>(1) }
     var vFrame by remember { mutableStateOf<ImageBitmap?>(null) }
-    var vReady by remember { mutableStateOf(false) }
     var vAspect by remember { mutableFloatStateOf(16f / 9f) }
     var resumed by remember { mutableStateOf(true) }
 
@@ -414,7 +414,6 @@ fun PlayerContent(
     val spec = parseCover(s.cover)
 
     DisposableEffect(spec.video) {
-        vReady = false
         vFrame = null
         if (spec.video.isBlank()) {
             vplayer = null
@@ -430,19 +429,13 @@ fun PlayerContent(
                         vAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
                     }
                 }
-
-                override fun onRenderedFirstFrame() {
-                    vReady = true
-                }
             })
             ex.prepare()
             ex.playWhenReady = player.playWhenReady
             vplayer = ex
             onDispose {
                 vplayer = null
-                vTexture = null
                 vFrame = null
-                vReady = false
                 ex.release()
             }
         }
@@ -464,22 +457,25 @@ fun PlayerContent(
             delay(200)
         }
     }
-    LaunchedEffect(vTexture, vplayer, vReady, resumed) {
-        val tv = vTexture
-        val vp = vplayer
-        if (tv == null || vp == null || !vReady || !resumed) return@LaunchedEffect
+    LaunchedEffect(vplayer, resumed) {
+        val vp = vplayer ?: return@LaunchedEffect
+        if (!resumed) return@LaunchedEffect
+        var last = 0L
         while (true) {
-            if (tv.isAvailable) {
-                val bw = 240
-                val bh = (bw / vAspect).roundToInt().coerceAtLeast(16)
-                val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
-                try {
-                    tv.getBitmap(b)
-                    vFrame = b.asImageBitmap()
-                } catch (e: Exception) {
-                }
+            val t = withFrameNanos { it }
+            val gap = if (vp.isPlaying) 30_000_000L else 300_000_000L
+            if (t - last < gap) continue
+            val tv = tvHolder[0]
+            if (tv == null || !tv.isAvailable || vp.playbackState != Player.STATE_READY) continue
+            last = t
+            val bw = 160
+            val bh = (bw / vAspect).roundToInt().coerceAtLeast(16)
+            val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+            try {
+                tv.getBitmap(b)
+                vFrame = b.asImageBitmap()
+            } catch (e: Exception) {
             }
-            delay(if (vp.isPlaying) 50L else 300L)
         }
     }
 
@@ -527,19 +523,22 @@ fun PlayerContent(
 
     CompositionLocalProvider(LocalSoftBg provides null) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            if (c != null) {
-                Image(
-                    bitmap = c,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                        .blur(16.dp, BlurredEdgeTreatment.Unbounded)
-                )
-                val fr = vFrame
-                if (fr != null && vplayer != null) {
+            val fr = vFrame
+            val showFrame = fr != null && vplayer != null
+            if (c != null || showFrame) {
+                if (c != null) {
+                    Image(
+                        bitmap = c,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                            .blur(16.dp, BlurredEdgeTreatment.Unbounded)
+                    )
+                }
+                if (fr != null && showFrame) {
                     Image(
                         bitmap = fr,
                         contentDescription = null,
@@ -668,7 +667,7 @@ fun PlayerContent(
                         }
                         val vp = vplayer
                         if (vp != null) {
-                            VideoFill(vp, vAspect, Modifier.fillMaxSize(), onView = { vTexture = it })
+                            VideoFill(vp, vAspect, Modifier.fillMaxSize(), onView = { tvHolder[0] = it })
                         }
                         Text(flashIcon, color = Color.White, fontSize = 56.sp, modifier = Modifier.alpha(flash.value))
                     }
