@@ -31,4 +31,5 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-session:1.4.1")
     implementation("com.google.guava:guava:33.3.1-android")
+    implementation("io.github.kyant0:backdrop:1.0.6")
 }
