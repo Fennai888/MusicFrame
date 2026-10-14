@@ -54,6 +54,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kyant.backdrop.Backdrop as KBackdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur as backdropBlur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
 
 data class Song(
     val uri: String,
@@ -155,6 +162,7 @@ fun Modifier.glass(r: Dp): Modifier = this
 
 val LocalSoftBg = compositionLocalOf<ImageBitmap?> { null }
 val LocalScreenSize = compositionLocalOf { IntSize.Zero }
+val LocalGlassBackdrop = compositionLocalOf<KBackdrop?> { null }
 
 data class BgImages(val full: ImageBitmap, val soft: ImageBitmap)
 
@@ -197,6 +205,7 @@ fun Glass(
     backdrop: (@Composable () -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
+    val glassBackdrop = LocalGlassBackdrop.current
     val soft = LocalSoftBg.current
     val screen = LocalScreenSize.current
     val density = LocalDensity.current
@@ -205,7 +214,10 @@ fun Glass(
     val longState by rememberUpdatedState(onLongClick)
     var pos by remember { mutableStateOf(IntOffset.Zero) }
     val shape = RoundedCornerShape(radius)
-    val hasBlur = soft != null && screen.width > 0
+    val backdropShape = shape
+    val lensHeight = radius * 0.4f
+    val lensAmount = radius * 0.8f
+    val hasBlur = glassBackdrop != null || (soft != null && screen.width > 0)
     val dark = dim > 0f
     val a1 = if (dark) 0.08f else if (hasBlur) 0.22f else 0.30f
     val a2 = if (dark) 0.03f else if (hasBlur) 0.08f else 0.12f
@@ -224,14 +236,29 @@ fun Glass(
     } else {
         Modifier
     }
+    val glassModifier = if (glassBackdrop != null) {
+        Modifier.drawBackdrop(
+            backdrop = glassBackdrop,
+            shape = { backdropShape },
+            effects = {
+                vibrancy()
+                backdropBlur(10f.dp.toPx())
+                lens(lensHeight.toPx(), lensAmount.toPx())
+            },
+            onDrawSurface = { drawRect(Color.Black.copy(alpha = 0.06f)) },
+        )
+    } else {
+        Modifier
+    }
     Box(
         modifier
             .onGloballyPositioned { pos = it.positionInRoot().round() }
+            .then(glassModifier)
             .clip(shape)
             .then(tapModifier),
         contentAlignment = contentAlignment
     ) {
-        if (backdrop != null && screen.width > 0) {
+        if (glassBackdrop == null && backdrop != null && screen.width > 0) {
             Box(Modifier.matchParentSize()) {
                 Box(
                     Modifier
@@ -246,7 +273,7 @@ fun Glass(
                     backdrop()
                 }
             }
-        } else if (soft != null && screen.width > 0) {
+        } else if (glassBackdrop == null && soft != null && screen.width > 0) {
             Box(Modifier.matchParentSize()) {
                 Image(
                     bitmap = soft,
@@ -286,6 +313,11 @@ fun App() {
     var deleteIndex by remember { mutableStateOf<Int?>(null) }
     var screen by remember { mutableStateOf(IntSize.Zero) }
     val bg by rememberBackground(bgUri)
+    val glassBackdropBase = Color.Black
+    val glassBackdrop = rememberLayerBackdrop {
+        drawRect(glassBackdropBase)
+        drawContent()
+    }
     val gridState = rememberLazyGridState()
     val sheetOpen = showSettings || deleteIndex != null
 
@@ -337,10 +369,13 @@ fun App() {
 
     CompositionLocalProvider(
         LocalSoftBg provides bg?.soft,
-        LocalScreenSize provides screen
+        LocalScreenSize provides screen,
+        LocalGlassBackdrop provides glassBackdrop
     ) {
         Box(Modifier.fillMaxSize().onSizeChanged { screen = it }) {
-            HomeBackground(bg)
+            Box(Modifier.fillMaxSize().layerBackdrop(glassBackdrop)) {
+                HomeBackground(bg)
+            }
             if (songs.isEmpty()) {
                 EmptyCard { picker.launch(arrayOf("audio/*")) }
             } else {
@@ -445,15 +480,17 @@ fun App() {
                 }
             }
             playingIndex?.let { i ->
-                PlayerScreen(
-                    songs,
-                    i,
-                    onUpdate = { idx, sg ->
-                        songs = songs.toMutableList().also { it[idx] = sg }
-                        Store.save(ctx, songs)
-                    },
-                    onClose = { playingIndex = null }
-                )
+                CompositionLocalProvider(LocalGlassBackdrop provides null) {
+                    PlayerScreen(
+                        songs,
+                        i,
+                        onUpdate = { idx, sg ->
+                            songs = songs.toMutableList().also { it[idx] = sg }
+                            Store.save(ctx, songs)
+                        },
+                        onClose = { playingIndex = null }
+                    )
+                }
             }
         }
     }
