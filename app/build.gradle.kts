@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.musicframe.app"
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig {
         applicationId = "com.musicframe.app"
         minSdk = 31
