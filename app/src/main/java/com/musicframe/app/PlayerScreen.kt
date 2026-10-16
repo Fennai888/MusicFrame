@@ -73,6 +73,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur as backdropBlur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -521,39 +527,51 @@ fun PlayerContent(
         showFlash(label)
     }
 
-    CompositionLocalProvider(LocalSoftBg provides null) {
+    val playerBackdropBase = Color.Black
+    val playerBackdrop = rememberLayerBackdrop {
+        drawRect(playerBackdropBase)
+        drawContent()
+    }
+    val cardShape = RoundedCornerShape(44.dp)
+
+    CompositionLocalProvider(
+        LocalSoftBg provides null,
+        LocalGlassBackdrop provides playerBackdrop
+    ) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            val fr = vFrame
-            val showFrame = fr != null && vplayer != null
-            if (c != null || showFrame) {
-                if (c != null) {
-                    Image(
-                        bitmap = c,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                            .blur(16.dp, BlurredEdgeTreatment.Unbounded)
-                    )
+            Box(Modifier.fillMaxSize().layerBackdrop(playerBackdrop)) {
+                val fr = vFrame
+                val showFrame = fr != null && vplayer != null
+                if (c != null || showFrame) {
+                    if (c != null) {
+                        Image(
+                            bitmap = c,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                                .blur(16.dp, BlurredEdgeTreatment.Unbounded)
+                        )
+                    }
+                    if (fr != null && showFrame) {
+                        Image(
+                            bitmap = fr,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            filterQuality = FilterQuality.Medium,
+                            colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                                .blur(16.dp, BlurredEdgeTreatment.Unbounded)
+                        )
+                    }
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
+                } else {
+                    Backdrop()
                 }
-                if (fr != null && showFrame) {
-                    Image(
-                        bitmap = fr,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        filterQuality = FilterQuality.Medium,
-                        colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                            .blur(16.dp, BlurredEdgeTreatment.Unbounded)
-                    )
-                }
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
-            } else {
-                Backdrop()
             }
             Box(Modifier.fillMaxSize().imePadding()) {
                 Column(
@@ -562,6 +580,16 @@ fun PlayerContent(
                         .fillMaxWidth()
                         .padding(horizontal = 28.dp)
                         .offset { IntOffset(dragX.value.roundToInt(), 0) }
+                        .drawBackdrop(
+                            backdrop = playerBackdrop,
+                            shape = { cardShape },
+                            effects = {
+                                vibrancy()
+                                backdropBlur(8f.dp.toPx())
+                                lens(14f.dp.toPx(), 28f.dp.toPx())
+                            },
+                            onDrawSurface = { drawRect(Color.Black.copy(alpha = 0.05f)) },
+                        )
                         .clip(RoundedCornerShape(44.dp))
                         .background(
                             Brush.verticalGradient(
