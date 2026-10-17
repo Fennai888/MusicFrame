@@ -469,12 +469,12 @@ fun PlayerContent(
         var last = 0L
         while (true) {
             val t = withFrameNanos { it }
-            val gap = if (vp.isPlaying) 30_000_000L else 300_000_000L
+            val gap = if (vp.isPlaying) 50_000_000L else 300_000_000L
             if (t - last < gap) continue
             val tv = tvHolder[0]
             if (tv == null || !tv.isAvailable || vp.playbackState != Player.STATE_READY) continue
             last = t
-            val bw = 160
+            val bw = 320
             val bh = (bw / vAspect).roundToInt().coerceAtLeast(16)
             val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
             try {
@@ -560,12 +560,12 @@ fun PlayerContent(
                             bitmap = fr,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
-                            filterQuality = FilterQuality.Medium,
+                            filterQuality = FilterQuality.High,
                             colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                                .blur(16.dp, BlurredEdgeTreatment.Unbounded)
+                                .blur(28.dp, BlurredEdgeTreatment.Unbounded)
                         )
                     }
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
