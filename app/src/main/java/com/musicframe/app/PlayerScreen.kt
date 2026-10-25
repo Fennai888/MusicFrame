@@ -17,6 +17,7 @@ import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -54,6 +55,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -145,6 +147,47 @@ fun prepareCover(src: Bitmap): Bitmap {
 fun fmtTime(ms: Long): String {
     val t = (ms / 1000).coerceAtLeast(0)
     return "${t / 60}:${(t % 60).toString().padStart(2, '0')}"
+}
+
+fun dominantTint(img: ImageBitmap): Color? {
+    return try {
+        val src = img.asAndroidBitmap()
+        val n = 24
+        val small = Bitmap.createScaledBitmap(src, n, n, true)
+        var r = 0f
+        var g = 0f
+        var b = 0f
+        var wsum = 0f
+        for (y in 0 until n) {
+            for (x in 0 until n) {
+                val p = small.getPixel(x, y)
+                val pr = android.graphics.Color.red(p) / 255f
+                val pg = android.graphics.Color.green(p) / 255f
+                val pb = android.graphics.Color.blue(p) / 255f
+                val mx = maxOf(pr, pg, pb)
+                val mn = minOf(pr, pg, pb)
+                val sat = if (mx <= 0f) 0f else (mx - mn) / mx
+                val w = 0.1f + sat * (0.3f + mx)
+                r += pr * w
+                g += pg * w
+                b += pb * w
+                wsum += w
+            }
+        }
+        if (wsum <= 0f) return null
+        val hsv = FloatArray(3)
+        android.graphics.Color.RGBToHSV(
+            (r / wsum * 255f).roundToInt().coerceIn(0, 255),
+            (g / wsum * 255f).roundToInt().coerceIn(0, 255),
+            (b / wsum * 255f).roundToInt().coerceIn(0, 255),
+            hsv
+        )
+        hsv[1] = (hsv[1] * 1.15f).coerceAtMost(1f)
+        hsv[2] = hsv[2].coerceIn(0.4f, 0.95f)
+        Color(android.graphics.Color.HSVToColor(hsv))
+    } catch (e: Exception) {
+        null
+    }
 }
 
 fun artFile(ctx: Context, s: Song): File {
@@ -493,6 +536,24 @@ fun PlayerContent(
         value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 1600)?.asImageBitmap() }
     }
     val c = cover
+    val bgTint by produceState<Color?>(null, c) {
+        if (c != null) {
+            value = withContext(Dispatchers.Default) { dominantTint(c) }
+        } else {
+            while (true) {
+                val f = vFrame
+                if (f != null && vplayer != null) {
+                    value = withContext(Dispatchers.Default) { dominantTint(f) }
+                }
+                delay(1500)
+            }
+        }
+    }
+    val shownTint by animateColorAsState(
+        targetValue = bgTint ?: Color.Transparent,
+        animationSpec = tween(900),
+        label = "bgTint"
+    )
 
     val glowFrac by animateFloatAsState(
         targetValue = if (durMs > 0) {
@@ -551,8 +612,8 @@ fun PlayerContent(
                             colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
                             modifier = Modifier
                                 .fillMaxSize()
-                                .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                                .blur(16.dp, BlurredEdgeTreatment.Unbounded)
+                                .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
+                                .blur(56.dp, BlurredEdgeTreatment.Unbounded)
                         )
                     }
                     if (fr != null && showFrame) {
@@ -564,11 +625,32 @@ fun PlayerContent(
                             colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
                             modifier = Modifier
                                 .fillMaxSize()
-                                .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                                .blur(28.dp, BlurredEdgeTreatment.Unbounded)
+                                .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
+                                .blur(56.dp, BlurredEdgeTreatment.Unbounded)
                         )
                     }
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
+                    val tint = shownTint
+                    if (bgTint != null) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            tint.copy(alpha = 0.30f),
+                                            tint.copy(alpha = 0.18f),
+                                            tint.copy(
+                                                alpha = 0.60f,
+                                                red = tint.red * 0.45f,
+                                                green = tint.green * 0.45f,
+                                                blue = tint.blue * 0.45f
+                                            )
+                                        )
+                                    )
+                                )
+                        )
+                    }
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.06f)))
                 } else {
                     Backdrop()
                 }
