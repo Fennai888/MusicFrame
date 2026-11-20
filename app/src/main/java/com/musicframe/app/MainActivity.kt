@@ -3,6 +3,7 @@ package com.musicframe.app
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.media.MediaMetadataRetriever
@@ -40,6 +41,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -200,6 +202,7 @@ fun Glass(
     radius: Dp,
     contentAlignment: Alignment = Alignment.TopStart,
     dim: Float = 0f,
+    tint: Color = Color.Unspecified,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     backdrop: (@Composable () -> Unit)? = null,
@@ -245,7 +248,9 @@ fun Glass(
                 backdropBlur(10f.dp.toPx())
                 lens(lensHeight.toPx(), lensAmount.toPx())
             },
-            onDrawSurface = { drawRect(Color.Black.copy(alpha = 0.06f)) },
+            onDrawSurface = {
+                drawRect(if (tint != Color.Unspecified) tint.copy(alpha = 0.28f) else Color.Black.copy(alpha = 0.06f))
+            },
         )
     } else {
         Modifier
@@ -299,6 +304,9 @@ fun Glass(
                 .matchParentSize()
                 .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = a1), Color.White.copy(alpha = a2))))
         )
+        if (tint != Color.Unspecified) {
+            Box(Modifier.matchParentSize().background(tint.copy(alpha = 0.18f)))
+        }
         content()
     }
 }
@@ -365,6 +373,12 @@ fun App() {
     BackHandler(enabled = sheetOpen) {
         showSettings = false
         deleteIndex = null
+    }
+
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    if (landscape && songs.isNotEmpty()) {
+        LandscapeScreen(songs, bg, onAdd = { picker.launch(arrayOf("audio/*")) })
+        return
     }
 
     CompositionLocalProvider(
