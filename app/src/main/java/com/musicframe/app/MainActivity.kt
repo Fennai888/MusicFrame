@@ -536,7 +536,7 @@ fun HomeBackground(images: BgImages?) {
         )
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.12f)))
     } else {
-        Backdrop()
+        Box(Modifier.fillMaxSize().background(Color.Black))
     }
 }
 
