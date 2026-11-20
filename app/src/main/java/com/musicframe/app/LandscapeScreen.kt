@@ -341,34 +341,68 @@ fun QueueList(
         ) {
             itemsIndexed(songs, key = { _, s -> s.uri }) { i, s ->
                 val isCur = i == index
-                Column(
+                Row(
                     Modifier
                         .fillMaxWidth()
                         .then(if (isCur) Modifier.glassTint(16.dp, tint) else Modifier.clip(RoundedCornerShape(16.dp)))
                         .clickable { onPick(i) }
-                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        s.title,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
-                        style = TextStyle(shadow = textShadow),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (s.artist.isNotBlank()) {
+                    QueueThumb(s)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            s.artist,
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 10.sp,
+                            s.title,
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
                             style = TextStyle(shadow = textShadow),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (s.artist.isNotBlank()) {
+                            Text(
+                                s.artist,
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 10.sp,
+                                style = TextStyle(shadow = textShadow),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
+        }
+    }
+}
+
+/** รูปปกเล็กหน้าชื่อเพลงในรายการซ้าย */
+@Composable
+fun QueueThumb(s: Song) {
+    val ctx = LocalContext.current
+    val thumb by produceState<ImageBitmap?>(null, s.uri, s.cover) {
+        value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 160)?.asImageBitmap() }
+    }
+    val t = thumb
+    Box(
+        Modifier
+            .size(34.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF5BA3D0), Color(0xFFF2B38F)))),
+        contentAlignment = Alignment.Center
+    ) {
+        if (t != null) {
+            Image(
+                bitmap = t,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                filterQuality = FilterQuality.High,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Text("♪", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
         }
     }
 }
