@@ -1,8 +1,10 @@
 package com.musicframe.app
 
 import android.content.ComponentName
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -24,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -49,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -63,6 +67,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /* ---------- ตัวเชื่อมกับ PlaybackService (แบบเดียวกับ PlayerScreen) ---------- */
 
@@ -94,11 +99,23 @@ fun LandscapeScreen(songs: List<Song>, bg: BgImages?, onAdd: () -> Unit) {
     }
 }
 
+private fun playerLoaded(player: Player, songs: List<Song>): Boolean {
+    if (player.mediaItemCount != songs.size) return false
+    for (i in songs.indices) {
+        if (player.getMediaItemAt(i).mediaId != songs[i].uri) return false
+    }
+    return true
+}
+
 @Composable
 fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var index by remember { mutableIntStateOf(0) }
+    var index by remember {
+        mutableIntStateOf(
+            if (playerLoaded(player, songs)) player.currentMediaItemIndex.coerceIn(0, songs.size - 1) else 0
+        )
+    }
     var posMs by remember { mutableLongStateOf(0L) }
     var durMs by remember { mutableLongStateOf(0L) }
     var loaded by remember { mutableStateOf(false) }
@@ -303,7 +320,24 @@ fun QueueList(
     onPick: (Int) -> Unit,
     onAdd: () -> Unit
 ) {
-    val dens = LocalDensity.current.density
+    val density = LocalDensity.current
+    val dens = density.density
+    val rowH = 46.dp
+    val gap = 2.dp
+    val topPad = 4.dp
+    val pitchPx = with(density) { (rowH + gap).toPx() }
+    val topPx = with(density) { topPad.toPx() }
+
+    // แผ่นกระจกชิ้นเดียว เลื่อนไปหาเพลงที่เลือก (ไม่ได้วาร์ปทีละแถว)
+    val pillY = remember { Animatable(index * pitchPx) }
+    LaunchedEffect(index) {
+        pillY.animateTo(index * pitchPx, spring(dampingRatio = 0.82f, stiffness = 320f))
+    }
+    val ls = rememberLazyListState()
+    LaunchedEffect(index) {
+        ls.animateScrollToItem((index - 1).coerceAtLeast(0))
+    }
+
     Column(
         modifier.graphicsLayer {
             rotationY = LIST_TILT
@@ -330,46 +364,55 @@ fun QueueList(
                 Text("+", color = Color.White, fontSize = 20.sp, style = TextStyle(shadow = textShadow))
             }
         }
-        val ls = rememberLazyListState()
-        LaunchedEffect(index) {
-            ls.animateScrollToItem((index - 1).coerceAtLeast(0))
-        }
-        LazyColumn(
-            state = ls,
-            contentPadding = PaddingValues(vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            itemsIndexed(songs, key = { _, s -> s.uri }) { i, s ->
-                val isCur = i == index
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .then(if (isCur) Modifier.glassTint(16.dp, tint) else Modifier.clip(RoundedCornerShape(16.dp)))
-                        .clickable { onPick(i) }
-                        .padding(horizontal = 8.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    QueueThumb(s)
-                    Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            s.title,
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
-                            style = TextStyle(shadow = textShadow),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        if (s.artist.isNotBlank()) {
+        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
+            Box(
+                Modifier
+                    .offset {
+                        val scroll = ls.firstVisibleItemIndex * pitchPx + ls.firstVisibleItemScrollOffset
+                        IntOffset(0, (topPx + pillY.value - scroll).roundToInt())
+                    }
+                    .fillMaxWidth()
+                    .height(rowH)
+                    .glassTint(16.dp, tint)
+            )
+            LazyColumn(
+                state = ls,
+                contentPadding = PaddingValues(vertical = topPad),
+                verticalArrangement = Arrangement.spacedBy(gap)
+            ) {
+                itemsIndexed(songs, key = { _, s -> s.uri }) { i, s ->
+                    val isCur = i == index
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(rowH)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onPick(i) }
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        QueueThumb(s)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
                             Text(
-                                s.artist,
-                                color = Color.White.copy(alpha = 0.7f),
-                                fontSize = 10.sp,
+                                s.title,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
                                 style = TextStyle(shadow = textShadow),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            if (s.artist.isNotBlank()) {
+                                Text(
+                                    s.artist,
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 10.sp,
+                                    style = TextStyle(shadow = textShadow),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
@@ -429,12 +472,17 @@ fun CoverCarousel(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val dens = density.density
-    val dragX = remember { Animatable(0f) }
+    // ตำแหน่งต่อเนื่องของวงล้อการ์ด (หน่วย = จำนวนเพลง) เปลี่ยนเพลงที่ไหนก็เลื่อนมาเอง
+    val pos = remember { Animatable(index.toFloat()) }
     val curIndex by rememberUpdatedState(index)
     val count by rememberUpdatedState(songs.size)
     val onChangeNow by rememberUpdatedState(onChange)
     val onToggleNow by rememberUpdatedState(onToggle)
     val cur = songs.getOrNull(index)
+
+    LaunchedEffect(index) {
+        pos.animateTo(index.toFloat(), spring(dampingRatio = 0.85f, stiffness = 260f))
+    }
 
     BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
         val cardSide = minOf(maxHeight - 46.dp, maxWidth * 0.24f).coerceAtLeast(60.dp)
@@ -460,30 +508,33 @@ fun CoverCarousel(
                     }
                 }
                 .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            val d = dragX.value
-                            val st = stepNow
+                    fun settle() {
+                        val p = pos.value
+                        val c = curIndex
+                        val target = when {
+                            p > c + 0.25f -> c + 1
+                            p < c - 0.25f -> c - 1
+                            else -> c
+                        }.coerceIn(0, (count - 1).coerceAtLeast(0))
+                        if (target != c) {
+                            onChangeNow(target)
+                        } else {
                             scope.launch {
-                                if (d < -st * 0.3f && curIndex < count - 1) {
-                                    dragX.animateTo(-st, tween(180))
-                                    onChangeNow(curIndex + 1)
-                                    dragX.snapTo(0f)
-                                } else if (d > st * 0.3f && curIndex > 0) {
-                                    dragX.animateTo(st, tween(180))
-                                    onChangeNow(curIndex - 1)
-                                    dragX.snapTo(0f)
-                                } else {
-                                    dragX.animateTo(0f, tween(220))
-                                }
+                                pos.animateTo(c.toFloat(), spring(dampingRatio = 0.85f, stiffness = 260f))
                             }
-                        },
-                        onDragCancel = { scope.launch { dragX.animateTo(0f, tween(220)) } }
+                        }
+                    }
+                    detectHorizontalDragGestures(
+                        onDragStart = { scope.launch { pos.stop() } },
+                        onDragEnd = { settle() },
+                        onDragCancel = { settle() }
                     ) { change, amount ->
                         change.consume()
                         scope.launch {
-                            val st = stepNow
-                            dragX.snapTo((dragX.value + amount).coerceIn(-st, st))
+                            pos.snapTo(
+                                (pos.value - amount / stepNow)
+                                    .coerceIn(-0.4f, (count - 1).coerceAtLeast(0) + 0.4f)
+                            )
                         }
                     }
                 }
@@ -493,14 +544,15 @@ fun CoverCarousel(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(Modifier.fillMaxWidth().height(cardSide)) {
-                    for (rel in listOf(-3, 3, -2, 2, -1, 1, 0)) {
-                        val s = songs.getOrNull(index + rel) ?: continue
+                    for (rel in listOf(-4, 4, -3, 3, -2, 2, -1, 1, 0)) {
+                        val i = index + rel
+                        val s = songs.getOrNull(i) ?: continue
                         key(s.uri) {
                             Box(
                                 Modifier
                                     .align(Alignment.Center)
                                     .graphicsLayer {
-                                        val o = rel + dragX.value / stepNow
+                                        val o = i - pos.value
                                         val a = abs(o)
                                         val sc = (1f - 0.17f * minOf(a, 2f)).coerceAtLeast(0.6f)
                                         scaleX = sc
@@ -519,29 +571,33 @@ fun CoverCarousel(
                         }
                     }
                 }
-                if (cur != null) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        cur.title,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        style = TextStyle(shadow = textShadow),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = cardSide * 1.8f)
-                    )
-                    Text(
-                        cur.artist,
-                        color = Color.White.copy(alpha = 0.75f),
-                        fontSize = 10.sp,
-                        textAlign = TextAlign.Center,
-                        style = TextStyle(shadow = textShadow),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = cardSide * 1.8f)
-                    )
+                Spacer(Modifier.height(6.dp))
+                Crossfade(targetState = cur, animationSpec = tween(250), label = "carouselTitle") { s ->
+                    if (s != null) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                s.title,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                style = TextStyle(shadow = textShadow),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = cardSide * 1.8f)
+                            )
+                            Text(
+                                s.artist,
+                                color = Color.White.copy(alpha = 0.75f),
+                                fontSize = 10.sp,
+                                textAlign = TextAlign.Center,
+                                style = TextStyle(shadow = textShadow),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = cardSide * 1.8f)
+                            )
+                        }
+                    }
                 }
             }
         }
