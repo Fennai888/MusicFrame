@@ -1,4 +1,3 @@
-
 package com.musicframe.app
 
 import android.content.ComponentName
@@ -377,6 +376,9 @@ fun QueueList(
 /** องศาเอียงของรายการซ้าย — ถ้าเอียงผิดด้านให้เปลี่ยนเครื่องหมาย */
 private const val LIST_TILT = 14f
 
+/** ระยะห่างของการ์ดวงนอก (เทียบกับวงใน) ยิ่งน้อยยิ่งชิด */
+private const val OUTER_STEP = 0.7f
+
 /** องศาเอียงของการ์ดข้าง ๆ ต่อ 1 ช่อง — ถ้าเอียงผิดด้านให้เปลี่ยนเครื่องหมาย */
 private const val CARD_TILT = -28f
 
@@ -469,7 +471,10 @@ fun CoverCarousel(
                                         val sc = (1f - 0.17f * minOf(a, 2f)).coerceAtLeast(0.6f)
                                         scaleX = sc
                                         scaleY = sc
-                                        translationX = o * stepNow
+                                        // ใบนอก ๆ ขยับเข้ามาชิดกว่า เพราะถูกเอียงและย่อจนดูแคบลง
+                                        val dir = if (o < 0f) -1f else 1f
+                                        translationX = if (a <= 1f) o * stepNow
+                                        else dir * (stepNow + (a - 1f) * stepNow * OUTER_STEP)
                                         rotationY = (o * CARD_TILT).coerceIn(-45f, 45f)
                                         cameraDistance = 16f * dens
                                         alpha = if (a <= 2f) 1f - 0.12f * a else ((3f - a) * 0.76f).coerceAtLeast(0f)
