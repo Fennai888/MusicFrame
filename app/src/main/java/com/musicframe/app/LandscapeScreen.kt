@@ -307,7 +307,7 @@ fun QueueList(
     Column(
         modifier.graphicsLayer {
             rotationY = LIST_TILT
-            cameraDistance = 14f * dens
+            cameraDistance = 11f * dens
             transformOrigin = TransformOrigin(0f, 0.5f)
         }
     ) {
@@ -408,7 +408,7 @@ fun QueueThumb(s: Song) {
 }
 
 /** องศาเอียงของรายการซ้าย — ถ้าเอียงผิดด้านให้เปลี่ยนเครื่องหมาย */
-private const val LIST_TILT = 14f
+private const val LIST_TILT = 26f
 
 /** ระยะห่างของการ์ดวงนอก (เทียบกับวงใน) ยิ่งน้อยยิ่งชิด */
 private const val OUTER_STEP = 0.7f
