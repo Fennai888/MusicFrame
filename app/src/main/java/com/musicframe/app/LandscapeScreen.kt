@@ -1,6 +1,7 @@
 package com.musicframe.app
 
 import android.content.ComponentName
+import android.util.LruCache
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -99,6 +100,44 @@ fun LandscapeScreen(songs: List<Song>, bg: BgImages?, onAdd: () -> Unit) {
     }
 }
 
+/** เก็บรูปปกที่ถอดแล้วไว้ในหน่วยความจำ — การ์ดที่ถูกสร้างใหม่จะได้รูปทันที ไม่กะพริบเป็นพื้นเปล่า */
+private object ThumbCache {
+    private val bitmaps = object : LruCache<String, ImageBitmap>(40 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: ImageBitmap): Int = value.width * value.height * 4
+    }
+    private val tints = HashMap<String, Color>()
+
+    fun bitmap(key: String): ImageBitmap? = bitmaps.get(key)
+    fun putBitmap(key: String, v: ImageBitmap) {
+        bitmaps.put(key, v)
+    }
+
+    fun tint(key: String): Color? = tints[key]
+    fun putTint(key: String, v: Color) {
+        tints[key] = v
+    }
+}
+
+private fun coverKey(s: Song, size: Int): String = "${s.uri}|${s.cover}|$size"
+
+/** โหลดปกของเพลง โดยเริ่มจากแคชก่อน และไม่ล้างรูปทิ้งถ้าโหลดรอบใหม่ไม่ได้ */
+@Composable
+fun rememberCoverBitmap(s: Song, size: Int): ImageBitmap? {
+    val ctx = LocalContext.current
+    val key = coverKey(s, size)
+    var bmp by remember(key) { mutableStateOf(ThumbCache.bitmap(key)) }
+    LaunchedEffect(key) {
+        if (bmp == null) {
+            val b = withContext(Dispatchers.IO) { Covers.load(ctx, s, size)?.asImageBitmap() }
+            if (b != null) {
+                ThumbCache.putBitmap(key, b)
+                bmp = b
+            }
+        }
+    }
+    return bmp
+}
+
 private fun playerLoaded(player: Player, songs: List<Song>): Boolean {
     if (player.mediaItemCount != songs.size) return false
     for (i in songs.indices) {
@@ -191,9 +230,15 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
     }
 
     val cur = songs.getOrNull(index)
-    val cover by produceState<ImageBitmap?>(null, cur?.uri, cur?.cover) {
-        value = if (cur == null) null else withContext(Dispatchers.IO) {
-            Covers.load(ctx, cur, 800)?.asImageBitmap()
+    val cover by produceState<ImageBitmap?>(
+        cur?.let { ThumbCache.bitmap(coverKey(it, 800)) }, cur?.uri, cur?.cover
+    ) {
+        if (cur != null) {
+            val k = coverKey(cur, 800)
+            val b = ThumbCache.bitmap(k) ?: withContext(Dispatchers.IO) {
+                Covers.load(ctx, cur, 800)?.asImageBitmap()
+            }?.also { ThumbCache.putBitmap(k, it) }
+            if (b != null) value = b
         }
     }
     val c = cover
@@ -341,7 +386,7 @@ fun QueueList(
     Column(
         modifier.graphicsLayer {
             rotationY = LIST_TILT
-            cameraDistance = 11f * dens
+            cameraDistance = 9f * dens
             transformOrigin = TransformOrigin(0f, 0.5f)
         }
     ) {
@@ -424,11 +469,7 @@ fun QueueList(
 /** รูปปกเล็กหน้าชื่อเพลงในรายการซ้าย */
 @Composable
 fun QueueThumb(s: Song) {
-    val ctx = LocalContext.current
-    val thumb by produceState<ImageBitmap?>(null, s.uri, s.cover) {
-        value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 160)?.asImageBitmap() }
-    }
-    val t = thumb
+    val t = rememberCoverBitmap(s, 160)
     Box(
         Modifier
             .size(34.dp)
@@ -606,13 +647,14 @@ fun CoverCarousel(
 
 @Composable
 fun CoverCard(s: Song, side: Dp) {
-    val ctx = LocalContext.current
-    val thumb by produceState<ImageBitmap?>(null, s.uri, s.cover) {
-        value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 700)?.asImageBitmap() }
-    }
-    val t = thumb
-    val tint by produceState(Color.White, t) {
-        value = withContext(Dispatchers.Default) { t?.let { dominantTint(it) } } ?: Color.White
+    val t = rememberCoverBitmap(s, 700)
+    val tintKey = coverKey(s, 700)
+    val tint by produceState(ThumbCache.tint(tintKey) ?: Color.White, t) {
+        if (t != null) {
+            val c = ThumbCache.tint(tintKey)
+                ?: withContext(Dispatchers.Default) { dominantTint(t) }?.also { ThumbCache.putTint(tintKey, it) }
+            if (c != null) value = c
+        }
     }
     val r = side * 0.14f
     Box(
