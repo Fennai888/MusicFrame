@@ -34,6 +34,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -248,7 +249,7 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
     val bgSoft by produceState<ImageBitmap?>(null, c) {
         if (c != null) {
             value = withContext(Dispatchers.Default) {
-                softBlurBitmap(c.asAndroidBitmap(), 96, 3).asImageBitmap()
+                softBlurBitmap(c.asAndroidBitmap(), 200, 2).asImageBitmap()
             }
         }
     }
@@ -408,7 +409,10 @@ fun QueueList(
     }
     val ls = rememberLazyListState()
     LaunchedEffect(index) {
-        ls.animateScrollToItem((index - 1).coerceAtLeast(0))
+        val vis = ls.layoutInfo.visibleItemsInfo
+        if (vis.isEmpty() || index <= vis.first().index || index >= vis.last().index) {
+            ls.animateScrollToItem((index - 1).coerceAtLeast(0))
+        }
     }
 
     Column(
@@ -440,12 +444,12 @@ fun QueueList(
         Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             Box(
                 Modifier
-                    .offset {
-                        val scroll = ls.firstVisibleItemIndex * pitchPx + ls.firstVisibleItemScrollOffset
-                        IntOffset(0, (topPx + pillY.value - scroll).roundToInt())
-                    }
                     .fillMaxWidth()
                     .height(rowH)
+                    .graphicsLayer {
+                        val scroll = ls.firstVisibleItemIndex * pitchPx + ls.firstVisibleItemScrollOffset
+                        translationY = topPx + pillY.value - scroll
+                    }
                     .glassTintLazy(16.dp) { tint.value }
             )
             LazyColumn(
@@ -632,6 +636,7 @@ fun CoverCarousel(
                                         else dir * (stepNow + (a - 1f) * stepNow * OUTER_STEP)
                                         rotationY = (o * CARD_TILT).coerceIn(-45f, 45f)
                                         cameraDistance = 16f * dens
+                                        compositingStrategy = CompositingStrategy.ModulateAlpha
                                         alpha = if (a <= 2f) 1f - 0.12f * a else ((3f - a) * 0.76f).coerceAtLeast(0f)
                                     }
                             ) {
