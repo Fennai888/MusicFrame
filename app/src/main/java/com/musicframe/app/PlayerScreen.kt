@@ -17,6 +17,7 @@ import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -512,17 +513,17 @@ fun PlayerContent(
         var last = 0L
         while (true) {
             val t = withFrameNanos { it }
-            val gap = if (vp.isPlaying) 160_000_000L else 400_000_000L
+            val gap = if (vp.isPlaying) 110_000_000L else 400_000_000L
             if (t - last < gap) continue
             val tv = tvHolder[0]
             if (tv == null || !tv.isAvailable || vp.playbackState != Player.STATE_READY) continue
             last = t
-            val bw = 96
+            val bw = 160
             val bh = (bw / vAspect).roundToInt().coerceAtLeast(16)
             val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
             try {
                 tv.getBitmap(b)
-                val soft = withContext(Dispatchers.Default) { softBlurBitmap(b, 96, 3) }
+                val soft = withContext(Dispatchers.Default) { softBlurBitmap(b, 160, 2) }
                 vFrame = soft.asImageBitmap()
             } catch (e: Exception) {
             }
@@ -540,7 +541,7 @@ fun PlayerContent(
     val bgSoft by produceState<ImageBitmap?>(null, c) {
         if (c != null) {
             value = withContext(Dispatchers.Default) {
-                softBlurBitmap(c.asAndroidBitmap(), 96, 3).asImageBitmap()
+                softBlurBitmap(c.asAndroidBitmap(), 200, 2).asImageBitmap()
             }
         }
     }
@@ -624,14 +625,17 @@ fun PlayerContent(
                         )
                     }
                     if (fr != null && showFrame) {
-                        Image(
-                            bitmap = fr,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            filterQuality = FilterQuality.High,
-                            colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                            modifier = Modifier.fillMaxSize()
-                        )
+                        // เฟรมที่ดึงมาถูกเบลอและมีไม่ถี่ — ไล่เฟดจากเฟรมเก่าไปเฟรมใหม่ จะได้ไหลลื่นไม่เป็นขั้น
+                        Crossfade(targetState = fr, animationSpec = tween(140), label = "bgFrame") { f ->
+                            Image(
+                                bitmap = f,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                filterQuality = FilterQuality.High,
+                                colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                     val tint = shownTint
                     if (bgTint != null) {
