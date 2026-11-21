@@ -31,6 +31,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -40,6 +42,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -242,10 +245,17 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
         }
     }
     val c = cover
+    val bgSoft by produceState<ImageBitmap?>(null, c) {
+        if (c != null) {
+            value = withContext(Dispatchers.Default) {
+                softBlurBitmap(c.asAndroidBitmap(), 96, 3).asImageBitmap()
+            }
+        }
+    }
     val coverTint by produceState<Color?>(null, c) {
         value = if (c == null) null else withContext(Dispatchers.Default) { dominantTint(c) }
     }
-    val tint by animateColorAsState(
+    val tintState = animateColorAsState(
         targetValue = coverTint ?: Color.White,
         animationSpec = tween(900),
         label = "lsTint"
@@ -256,12 +266,6 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
         drawContent()
     }
 
-    val frac = if (durMs > 0) {
-        (if (seeking) seekFrac else posMs.toFloat() / durMs).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    val shownPos = if (seeking && durMs > 0) (seekFrac * durMs).toLong() else posMs
 
     CompositionLocalProvider(
         LocalSoftBg provides null,
@@ -272,16 +276,17 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
                 if (bg != null) {
                     HomeBackground(bg)
                 } else if (c != null) {
-                    Image(
-                        bitmap = c,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
-                            .blur(56.dp, BlurredEdgeTreatment.Unbounded)
-                    )
+                    val soft = bgSoft
+                    if (soft != null) {
+                        Image(
+                            bitmap = soft,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            filterQuality = FilterQuality.High,
+                            colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)))
                 } else {
                     Backdrop()
@@ -298,7 +303,7 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
                     modifier = Modifier.weight(0.30f).fillMaxHeight(),
                     songs = songs,
                     index = index,
-                    tint = tint,
+                    tint = tintState,
                     onPick = { goTo(it) },
                     onAdd = onAdd
                 )
@@ -317,11 +322,17 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
                     Spacer(Modifier.height(6.dp))
                     LandscapeControls(
                         song = cur,
-                        tint = tint,
+                        tint = tintState,
                         playing = playing && loaded,
-                        shownPos = shownPos,
-                        durMs = durMs,
-                        frac = frac,
+                        shownPos = { if (seeking && durMs > 0) (seekFrac * durMs).toLong() else posMs },
+                        durMs = { durMs },
+                        frac = {
+                            if (durMs > 0) {
+                                (if (seeking) seekFrac else posMs.toFloat() / durMs).coerceIn(0f, 1f)
+                            } else {
+                                0f
+                            }
+                        },
                         onPrev = { if (index > 0) goTo(index - 1) },
                         onToggle = { toggle() },
                         onNext = { if (index < songs.size - 1) goTo(index + 1) },
@@ -352,6 +363,23 @@ fun Modifier.glassTint(r: Dp, tint: Color): Modifier = this
         RoundedCornerShape(r)
     )
 
+/** เหมือน glassTint แต่อ่านสีตอนวาดเท่านั้น สีเปลี่ยนทีละเฟรมก็ไม่ต้อง recompose */
+fun Modifier.glassTintLazy(r: Dp, tint: () -> Color): Modifier = this
+    .clip(RoundedCornerShape(r))
+    .drawBehind {
+        val t = tint()
+        drawRect(Brush.verticalGradient(listOf(t.copy(alpha = 0.55f), t.copy(alpha = 0.28f))))
+        drawRect(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.20f), Color.White.copy(alpha = 0.05f))))
+        val sw = 1.dp.toPx()
+        drawRoundRect(
+            Brush.linearGradient(listOf(Color.White.copy(alpha = 0.65f), Color.White.copy(alpha = 0.06f), t.copy(alpha = 0.55f))),
+            topLeft = Offset(sw / 2f, sw / 2f),
+            size = Size(size.width - sw, size.height - sw),
+            cornerRadius = CornerRadius(r.toPx()),
+            style = Stroke(sw)
+        )
+    }
+
 private val textShadow = Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f), 6f)
 
 /* ---------- ซ้าย: Continue Playing (ไม่มีกระจกครอบ เอียง 3D) ---------- */
@@ -361,7 +389,7 @@ fun QueueList(
     modifier: Modifier,
     songs: List<Song>,
     index: Int,
-    tint: Color,
+    tint: State<Color>,
     onPick: (Int) -> Unit,
     onAdd: () -> Unit
 ) {
@@ -386,7 +414,7 @@ fun QueueList(
     Column(
         modifier.graphicsLayer {
             rotationY = LIST_TILT
-            cameraDistance = 9f * dens
+            cameraDistance = 11f * dens
             transformOrigin = TransformOrigin(0f, 0.5f)
         }
     ) {
@@ -418,7 +446,7 @@ fun QueueList(
                     }
                     .fillMaxWidth()
                     .height(rowH)
-                    .glassTint(16.dp, tint)
+                    .glassTintLazy(16.dp) { tint.value }
             )
             LazyColumn(
                 state = ls,
@@ -647,8 +675,8 @@ fun CoverCarousel(
 
 @Composable
 fun CoverCard(s: Song, side: Dp) {
-    val t = rememberCoverBitmap(s, 700)
-    val tintKey = coverKey(s, 700)
+    val t = rememberCoverBitmap(s, 480)
+    val tintKey = coverKey(s, 480)
     val tint by produceState(ThumbCache.tint(tintKey) ?: Color.White, t) {
         if (t != null) {
             val c = ThumbCache.tint(tintKey)
@@ -675,7 +703,7 @@ fun CoverCard(s: Song, side: Dp) {
                     bitmap = t,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    filterQuality = FilterQuality.High,
+                    filterQuality = FilterQuality.Medium,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -709,18 +737,20 @@ fun PageDots(count: Int, index: Int) {
 @Composable
 fun LandscapeControls(
     song: Song?,
-    tint: Color,
+    tint: State<Color>,
     playing: Boolean,
-    shownPos: Long,
-    durMs: Long,
-    frac: Float,
+    shownPos: () -> Long,
+    durMs: () -> Long,
+    frac: () -> Float,
     onPrev: () -> Unit,
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onSeekPreview: (Float) -> Unit,
     onSeekCommit: (Float) -> Unit
 ) {
-    Glass(Modifier.fillMaxWidth(), radius = 28.dp, dim = 0.10f, tint = tint) {
+    val pos = shownPos()
+    val dur = durMs()
+    Glass(Modifier.fillMaxWidth(), radius = 28.dp, dim = 0.10f, tint = tint.value) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -749,14 +779,14 @@ fun LandscapeControls(
             Spacer(Modifier.width(8.dp))
             Row(Modifier.weight(1.6f), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    fmtTime(shownPos),
+                    fmtTime(pos),
                     color = Color.White,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace
                 )
-                SeekBar(frac, onSeekPreview, onSeekCommit, Modifier.weight(1f))
+                SeekBar(frac(), onSeekPreview, onSeekCommit, Modifier.weight(1f))
                 Text(
-                    if (durMs > 0) "-" + fmtTime(durMs - shownPos) else "--:--",
+                    if (dur > 0) "-" + fmtTime(dur - pos) else "--:--",
                     color = Color.White.copy(alpha = 0.75f),
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace
