@@ -512,17 +512,18 @@ fun PlayerContent(
         var last = 0L
         while (true) {
             val t = withFrameNanos { it }
-            val gap = if (vp.isPlaying) 50_000_000L else 300_000_000L
+            val gap = if (vp.isPlaying) 160_000_000L else 400_000_000L
             if (t - last < gap) continue
             val tv = tvHolder[0]
             if (tv == null || !tv.isAvailable || vp.playbackState != Player.STATE_READY) continue
             last = t
-            val bw = 320
+            val bw = 96
             val bh = (bw / vAspect).roundToInt().coerceAtLeast(16)
             val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
             try {
                 tv.getBitmap(b)
-                vFrame = b.asImageBitmap()
+                val soft = withContext(Dispatchers.Default) { softBlurBitmap(b, 96, 3) }
+                vFrame = soft.asImageBitmap()
             } catch (e: Exception) {
             }
         }
@@ -536,6 +537,13 @@ fun PlayerContent(
         value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 1600)?.asImageBitmap() }
     }
     val c = cover
+    val bgSoft by produceState<ImageBitmap?>(null, c) {
+        if (c != null) {
+            value = withContext(Dispatchers.Default) {
+                softBlurBitmap(c.asAndroidBitmap(), 96, 3).asImageBitmap()
+            }
+        }
+    }
     val bgTint by produceState<Color?>(null, c) {
         if (c != null) {
             value = withContext(Dispatchers.Default) { dominantTint(c) }
@@ -604,16 +612,15 @@ fun PlayerContent(
                 val fr = vFrame
                 val showFrame = fr != null && vplayer != null
                 if (c != null || showFrame) {
-                    if (c != null) {
+                    val soft = bgSoft
+                    if (c != null && soft != null) {
                         Image(
-                            bitmap = c,
+                            bitmap = soft,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
+                            filterQuality = FilterQuality.High,
                             colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
-                                .blur(56.dp, BlurredEdgeTreatment.Unbounded)
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
                     if (fr != null && showFrame) {
@@ -623,10 +630,7 @@ fun PlayerContent(
                             contentScale = ContentScale.Crop,
                             filterQuality = FilterQuality.High,
                             colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
-                                .blur(56.dp, BlurredEdgeTreatment.Unbounded)
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
                     val tint = shownTint
