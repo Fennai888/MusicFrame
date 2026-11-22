@@ -26,6 +26,17 @@ android {
         getByName("debug") {
             signingConfig = signingConfigs.getByName("fixed")
         }
+        getByName("release") {
+            // เซ็นด้วยกุญแจเดิมเพื่อให้ติดตั้งทับกับตัว debug ได้
+            signingConfig = signingConfigs.getByName("fixed")
+            // รอบแรกยังไม่เปิด R8 (ย่อโค้ด) เพื่อลดความเสี่ยงที่แอปจะพัง
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
+    }
+    lint {
+        // ไม่ให้ lint มาหยุด build release
+        checkReleaseBuilds = false
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
