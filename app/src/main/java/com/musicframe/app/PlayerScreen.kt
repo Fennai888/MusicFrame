@@ -42,6 +42,7 @@ import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -287,6 +288,70 @@ fun VideoFill(
 }
 
 @Composable
+private fun PlayerBgLayers(
+    c: ImageBitmap?,
+    frame: () -> ImageBitmap?,
+    hasTint: () -> Boolean,
+    tint: () -> Color
+) {
+    // อ่านค่า state ภายในฟังก์ชันนี้เท่านั้น เฟรมใหม่จึงวาดใหม่เฉพาะพื้นหลัง ไม่ใช่ทั้งหน้า
+    val f = frame()
+    if (c == null && f == null) {
+        Backdrop()
+        return
+    }
+    if (c != null) {
+        Image(
+            bitmap = c,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                .blur(16.dp, BlurredEdgeTreatment.Unbounded)
+        )
+    }
+    if (f != null) {
+        Image(
+            bitmap = f,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            filterQuality = FilterQuality.Medium,
+            colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                .blur(16.dp, BlurredEdgeTreatment.Unbounded)
+        )
+    }
+    if (hasTint()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .drawBehind {
+                    val t = tint()
+                    drawRect(
+                        Brush.verticalGradient(
+                            listOf(
+                                t.copy(alpha = 0.30f),
+                                t.copy(alpha = 0.18f),
+                                t.copy(
+                                    alpha = 0.60f,
+                                    red = t.red * 0.45f,
+                                    green = t.green * 0.45f,
+                                    blue = t.blue * 0.45f
+                                )
+                            )
+                        )
+                    )
+                }
+        )
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.06f)))
+}
+
+@Composable
 fun PlayerScreen(songs: List<Song>, startIndex: Int, onUpdate: (Int, Song) -> Unit, onClose: () -> Unit) {
     val ctx = LocalContext.current
     var controller by remember { mutableStateOf<MediaController?>(null) }
@@ -513,7 +578,7 @@ fun PlayerContent(
         var last = 0L
         while (true) {
             val t = withFrameNanos { it }
-            val gap = if (vp.isPlaying) 110_000_000L else 400_000_000L
+            val gap = if (vp.isPlaying) 30_000_000L else 300_000_000L
             if (t - last < gap) continue
             val tv = tvHolder[0]
             if (tv == null || !tv.isAvailable || vp.playbackState != Player.STATE_READY) continue
@@ -523,8 +588,7 @@ fun PlayerContent(
             val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
             try {
                 tv.getBitmap(b)
-                val soft = withContext(Dispatchers.Default) { softBlurBitmap(b, 160, 2) }
-                vFrame = soft.asImageBitmap()
+                vFrame = b.asImageBitmap()
             } catch (e: Exception) {
             }
         }
@@ -538,13 +602,6 @@ fun PlayerContent(
         value = withContext(Dispatchers.IO) { Covers.load(ctx, s, 1600)?.asImageBitmap() }
     }
     val c = cover
-    val bgSoft by produceState<ImageBitmap?>(null, c) {
-        if (c != null) {
-            value = withContext(Dispatchers.Default) {
-                softBlurBitmap(c.asAndroidBitmap(), 200, 2).asImageBitmap()
-            }
-        }
-    }
     val bgTint by produceState<Color?>(null, c) {
         if (c != null) {
             value = withContext(Dispatchers.Default) { dominantTint(c) }
@@ -558,7 +615,7 @@ fun PlayerContent(
             }
         }
     }
-    val shownTint by animateColorAsState(
+    val shownTint = animateColorAsState(
         targetValue = bgTint ?: Color.Transparent,
         animationSpec = tween(900),
         label = "bgTint"
@@ -604,63 +661,29 @@ fun PlayerContent(
     }
     val cardShape = RoundedCornerShape(44.dp)
 
+    // มีวิดีโอปก = ใช้กระจกแบบนิ่งเหมือนเวอร์ชันที่ลื่น (ไม่ต้องให้กระจกคำนวณเบลอ/เลนส์ใหม่ทุกเฟรม)
+    // ปกรูปนิ่ง = ใช้ liquid glass เต็มรูปแบบเหมือนเดิม
+    val liveVideo = vplayer != null
     CompositionLocalProvider(
         LocalSoftBg provides null,
-        LocalGlassBackdrop provides playerBackdrop
+        LocalGlassBackdrop provides (if (liveVideo) null else playerBackdrop)
     ) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            Box(Modifier.fillMaxSize().layerBackdrop(playerBackdrop)) {
-                val fr = vFrame
-                val showFrame = fr != null && vplayer != null
-                if (c != null || showFrame) {
-                    val soft = bgSoft
-                    if (c != null && soft != null) {
-                        Image(
-                            bitmap = soft,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            filterQuality = FilterQuality.High,
-                            colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                    if (fr != null && showFrame) {
-                        // เฟรมที่ดึงมาถูกเบลอและมีไม่ถี่ — ไล่เฟดจากเฟรมเก่าไปเฟรมใหม่ จะได้ไหลลื่นไม่เป็นขั้น
-                        Crossfade(targetState = fr, animationSpec = tween(140), label = "bgFrame") { f ->
-                            Image(
-                                bitmap = f,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                filterQuality = FilterQuality.High,
-                                colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
-                    val tint = shownTint
-                    if (bgTint != null) {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(
-                                            tint.copy(alpha = 0.30f),
-                                            tint.copy(alpha = 0.18f),
-                                            tint.copy(
-                                                alpha = 0.60f,
-                                                red = tint.red * 0.45f,
-                                                green = tint.green * 0.45f,
-                                                blue = tint.blue * 0.45f
-                                            )
-                                        )
-                                    )
-                                )
-                        )
-                    }
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.06f)))
-                } else {
-                    Backdrop()
+            if (liveVideo) {
+                PlayerBgLayers(
+                    c = c,
+                    frame = { vFrame },
+                    hasTint = { bgTint != null },
+                    tint = { shownTint.value }
+                )
+            } else {
+                Box(Modifier.fillMaxSize().layerBackdrop(playerBackdrop)) {
+                    PlayerBgLayers(
+                        c = c,
+                        frame = { null },
+                        hasTint = { bgTint != null },
+                        tint = { shownTint.value }
+                    )
                 }
             }
             Box(Modifier.fillMaxSize().imePadding()) {
@@ -670,15 +693,21 @@ fun PlayerContent(
                         .fillMaxWidth()
                         .padding(horizontal = 28.dp)
                         .offset { IntOffset(dragX.value.roundToInt(), 0) }
-                        .drawBackdrop(
-                            backdrop = playerBackdrop,
-                            shape = { cardShape },
-                            effects = {
-                                vibrancy()
-                                backdropBlur(8f.dp.toPx())
-                                lens(14f.dp.toPx(), 28f.dp.toPx())
-                            },
-                            onDrawSurface = { drawRect(Color.Black.copy(alpha = 0.05f)) },
+                        .then(
+                            if (liveVideo) {
+                                Modifier
+                            } else {
+                                Modifier.drawBackdrop(
+                                    backdrop = playerBackdrop,
+                                    shape = { cardShape },
+                                    effects = {
+                                        vibrancy()
+                                        backdropBlur(8f.dp.toPx())
+                                        lens(14f.dp.toPx(), 28f.dp.toPx())
+                                    },
+                                    onDrawSurface = { drawRect(Color.Black.copy(alpha = 0.05f)) },
+                                )
+                            }
                         )
                         .clip(RoundedCornerShape(44.dp))
                         .background(
