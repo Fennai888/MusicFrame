@@ -322,7 +322,7 @@ private fun PlayerBgLayers(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                .blur(16.dp, BlurredEdgeTreatment.Unbounded)
+                .blur(24.dp, BlurredEdgeTreatment.Unbounded)
         )
     }
     if (hasTint()) {
@@ -583,7 +583,7 @@ fun PlayerContent(
             val tv = tvHolder[0]
             if (tv == null || !tv.isAvailable || vp.playbackState != Player.STATE_READY) continue
             last = t
-            val bw = 160
+            val bw = 240
             val bh = (bw / vAspect).roundToInt().coerceAtLeast(16)
             val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
             try {
