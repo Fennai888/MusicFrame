@@ -260,6 +260,17 @@ fun Glass(
             .onGloballyPositioned { pos = it.positionInRoot().round() }
             .then(glassModifier)
             .clip(shape)
+            .then(
+                if (glassBackdrop == null) {
+                    Modifier.border(
+                        1.dp,
+                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.40f), Color.White.copy(alpha = 0.08f))),
+                        shape
+                    )
+                } else {
+                    Modifier
+                }
+            )
             .then(tapModifier),
         contentAlignment = contentAlignment
     ) {
