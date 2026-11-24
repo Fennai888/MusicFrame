@@ -297,31 +297,14 @@ fun VideoFill(
  * ได้หน้าตาใกล้เคียง liquid glass โดยไม่ต้องให้กระจกคำนวณเบลอ/เลนส์ใหม่ทุกเฟรม
  */
 @Composable
-private fun Modifier.frostedBehind(soft: ImageBitmap?, screen: IntSize): Modifier {
-    if (soft == null || screen.width <= 0 || screen.height <= 0) return this
+private fun Modifier.frostedBehind(soft: () -> ImageBitmap?, screen: IntSize): Modifier {
+    if (screen.width <= 0 || screen.height <= 0) return this
     var pos by remember { mutableStateOf(IntOffset.Zero) }
     return this
         .onGloballyPositioned { pos = it.positionInRoot().round() }
         .drawBehind {
-            val sa = soft.width.toFloat() / soft.height
-            val da = screen.width.toFloat() / screen.height
-            val sw: Int
-            val sh: Int
-            if (sa > da) {
-                sh = soft.height
-                sw = (soft.height * da).roundToInt().coerceAtLeast(1)
-            } else {
-                sw = soft.width
-                sh = (soft.width / da).roundToInt().coerceAtLeast(1)
-            }
-            drawImage(
-                soft,
-                srcOffset = IntOffset((soft.width - sw) / 2, (soft.height - sh) / 2),
-                srcSize = IntSize(sw, sh),
-                dstOffset = IntOffset(-pos.x, -pos.y),
-                dstSize = IntSize(screen.width, screen.height),
-                filterQuality = FilterQuality.Medium
-            )
+            val sb = soft()
+            if (sb != null) drawFrosted(sb, screen, pos)
         }
 }
 
@@ -701,22 +684,24 @@ fun PlayerContent(
 
     // มีวิดีโอปก = ใช้กระจกแบบนิ่งเหมือนเวอร์ชันที่ลื่น (ไม่ต้องให้กระจกคำนวณเบลอ/เลนส์ใหม่ทุกเฟรม)
     // ปกรูปนิ่ง = ใช้ liquid glass เต็มรูปแบบเหมือนเดิม
-    // ภาพพื้นหลังเบลอขนาดเล็ก อัปเดตครึ่งวินาทีครั้ง ใช้ทำกระจกฝ้าตอนปกเป็นวิดีโอ
-    var softLive by remember { mutableStateOf<ImageBitmap?>(null) }
+    // ภาพพื้นหลังเบลอขนาดเล็ก อัปเดตถี่ (~20 ครั้ง/วินาที) ใช้ทำกระจกฝ้าตอนปกเป็นวิดีโอ
+    // เก็บเป็น State และอ่านตอนวาดเท่านั้น จึงไม่ทำให้ทั้งหน้า recompose
+    val softLiveState = remember { mutableStateOf<ImageBitmap?>(null) }
+    val softLive = remember { { softLiveState.value } }
     LaunchedEffect(vplayer, c) {
         if (vplayer == null) {
-            softLive = null
+            softLiveState.value = null
             return@LaunchedEffect
         }
         c?.let {
-            softLive = withContext(Dispatchers.Default) {
+            softLiveState.value = withContext(Dispatchers.Default) {
                 softBlurBitmap(it.asAndroidBitmap(), 96, 2).asImageBitmap()
             }
         }
         while (true) {
-            delay(500)
+            delay(50)
             val f = vFrame ?: continue
-            softLive = withContext(Dispatchers.Default) {
+            softLiveState.value = withContext(Dispatchers.Default) {
                 softBlurBitmap(f.asAndroidBitmap(), 96, 2).asImageBitmap()
             }
         }
@@ -724,7 +709,8 @@ fun PlayerContent(
     val liveVideo = vplayer != null
     val screenSize = LocalScreenSize.current
     CompositionLocalProvider(
-        LocalSoftBg provides (if (liveVideo) softLive else null),
+        LocalSoftBg provides null,
+        LocalSoftLive provides (if (liveVideo) softLive else null),
         LocalGlassBackdrop provides (if (liveVideo) null else playerBackdrop)
     ) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
