@@ -28,6 +28,7 @@ import androidx.compose.ui.*
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -35,6 +36,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -54,6 +56,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 import com.kyant.backdrop.Backdrop as KBackdrop
@@ -166,6 +169,34 @@ val LocalSoftBg = compositionLocalOf<ImageBitmap?> { null }
 val LocalScreenSize = compositionLocalOf { IntSize.Zero }
 val LocalGlassBackdrop = compositionLocalOf<KBackdrop?> { null }
 
+/** ภาพพื้นหลังเบลอขนาดเล็กที่เปลี่ยนบ่อย (เช่นตอนปกเป็นวิดีโอ) — ส่งเป็นฟังก์ชันให้อ่านตอนวาดเท่านั้น จะได้ไม่ต้อง recompose */
+val LocalSoftLive = compositionLocalOf<(() -> ImageBitmap?)?> { null }
+
+/** วาดภาพพื้นหลังเบลอ (crop เต็มจอ) ให้ตรงตำแหน่งกับฉากหลังจริง โดย pos = ตำแหน่งของกระจกบนจอ */
+fun DrawScope.drawFrosted(soft: ImageBitmap, screen: IntSize, pos: IntOffset) {
+    if (screen.width <= 0 || screen.height <= 0) return
+    val sa = soft.width.toFloat() / soft.height
+    val da = screen.width.toFloat() / screen.height
+    val sw: Int
+    val sh: Int
+    if (sa > da) {
+        sh = soft.height
+        sw = (soft.height * da).roundToInt().coerceAtLeast(1)
+    } else {
+        sw = soft.width
+        sh = (soft.width / da).roundToInt().coerceAtLeast(1)
+    }
+    drawImage(
+        soft,
+        srcOffset = IntOffset((soft.width - sw) / 2, (soft.height - sh) / 2),
+        srcSize = IntSize(sw, sh),
+        dstOffset = IntOffset(-pos.x, -pos.y),
+        dstSize = IntSize(screen.width, screen.height),
+        filterQuality = FilterQuality.Medium
+    )
+    drawRect(Color.Black.copy(alpha = 0.12f))
+}
+
 data class BgImages(val full: ImageBitmap, val soft: ImageBitmap)
 
 fun softBlur(src: Bitmap): Bitmap {
@@ -210,6 +241,7 @@ fun Glass(
 ) {
     val glassBackdrop = LocalGlassBackdrop.current
     val soft = LocalSoftBg.current
+    val softLive = LocalSoftLive.current
     val screen = LocalScreenSize.current
     val density = LocalDensity.current
     val haptic = LocalHapticFeedback.current
@@ -220,7 +252,7 @@ fun Glass(
     val backdropShape = shape
     val lensHeight = radius * 0.4f
     val lensAmount = radius * 0.8f
-    val hasBlur = glassBackdrop != null || (soft != null && screen.width > 0)
+    val hasBlur = glassBackdrop != null || ((soft != null || softLive != null) && screen.width > 0)
     val dark = dim > 0f
     val a1 = if (dark) 0.08f else if (hasBlur) 0.22f else 0.30f
     val a2 = if (dark) 0.03f else if (hasBlur) 0.08f else 0.12f
@@ -289,6 +321,15 @@ fun Glass(
                     backdrop()
                 }
             }
+        } else if (glassBackdrop == null && softLive != null && screen.width > 0) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .drawBehind {
+                        val sb = softLive()
+                        if (sb != null) drawFrosted(sb, screen, pos)
+                    }
+            )
         } else if (glassBackdrop == null && soft != null && screen.width > 0) {
             Box(Modifier.matchParentSize()) {
                 Image(
