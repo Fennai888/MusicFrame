@@ -59,11 +59,14 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -75,6 +78,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.round
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.backdrops.layerBackdrop
@@ -285,6 +290,39 @@ fun VideoFill(
             modifier = Modifier.requiredSize(w, h)
         )
     }
+}
+
+/**
+ * กระจกฝ้าแบบเบา ใช้ตอนปกเป็นวิดีโอ: วาดภาพพื้นหลังที่เบลอไว้แล้ว (เล็กมาก) ให้ตรงตำแหน่งกับฉากหลังจริง
+ * ได้หน้าตาใกล้เคียง liquid glass โดยไม่ต้องให้กระจกคำนวณเบลอ/เลนส์ใหม่ทุกเฟรม
+ */
+@Composable
+private fun Modifier.frostedBehind(soft: ImageBitmap?, screen: IntSize): Modifier {
+    if (soft == null || screen.width <= 0 || screen.height <= 0) return this
+    var pos by remember { mutableStateOf(IntOffset.Zero) }
+    return this
+        .onGloballyPositioned { pos = it.positionInRoot().round() }
+        .drawBehind {
+            val sa = soft.width.toFloat() / soft.height
+            val da = screen.width.toFloat() / screen.height
+            val sw: Int
+            val sh: Int
+            if (sa > da) {
+                sh = soft.height
+                sw = (soft.height * da).roundToInt().coerceAtLeast(1)
+            } else {
+                sw = soft.width
+                sh = (soft.width / da).roundToInt().coerceAtLeast(1)
+            }
+            drawImage(
+                soft,
+                srcOffset = IntOffset((soft.width - sw) / 2, (soft.height - sh) / 2),
+                srcSize = IntSize(sw, sh),
+                dstOffset = IntOffset(-pos.x, -pos.y),
+                dstSize = IntSize(screen.width, screen.height),
+                filterQuality = FilterQuality.Medium
+            )
+        }
 }
 
 @Composable
@@ -663,9 +701,30 @@ fun PlayerContent(
 
     // มีวิดีโอปก = ใช้กระจกแบบนิ่งเหมือนเวอร์ชันที่ลื่น (ไม่ต้องให้กระจกคำนวณเบลอ/เลนส์ใหม่ทุกเฟรม)
     // ปกรูปนิ่ง = ใช้ liquid glass เต็มรูปแบบเหมือนเดิม
+    // ภาพพื้นหลังเบลอขนาดเล็ก อัปเดตครึ่งวินาทีครั้ง ใช้ทำกระจกฝ้าตอนปกเป็นวิดีโอ
+    var softLive by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(vplayer, c) {
+        if (vplayer == null) {
+            softLive = null
+            return@LaunchedEffect
+        }
+        c?.let {
+            softLive = withContext(Dispatchers.Default) {
+                softBlurBitmap(it.asAndroidBitmap(), 96, 2).asImageBitmap()
+            }
+        }
+        while (true) {
+            delay(500)
+            val f = vFrame ?: continue
+            softLive = withContext(Dispatchers.Default) {
+                softBlurBitmap(f.asAndroidBitmap(), 96, 2).asImageBitmap()
+            }
+        }
+    }
     val liveVideo = vplayer != null
+    val screenSize = LocalScreenSize.current
     CompositionLocalProvider(
-        LocalSoftBg provides null,
+        LocalSoftBg provides (if (liveVideo) softLive else null),
         LocalGlassBackdrop provides (if (liveVideo) null else playerBackdrop)
     ) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -710,6 +769,7 @@ fun PlayerContent(
                             }
                         )
                         .clip(RoundedCornerShape(44.dp))
+                        .then(if (liveVideo) Modifier.frostedBehind(softLive, screenSize) else Modifier)
                         .background(
                             Brush.verticalGradient(
                                 listOf(Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.12f))
@@ -739,7 +799,7 @@ fun PlayerContent(
                                     )
                                 )
                             }
-                            drawPath(path, Color.White.copy(alpha = 0.10f), style = Stroke(width = 1.5.dp.toPx()))
+                            drawPath(path, Color.White.copy(alpha = if (liveVideo) 0.28f else 0.10f), style = Stroke(width = 1.5.dp.toPx()))
                             if (glowFrac > 0f) {
                                 val pm = PathMeasure()
                                 pm.setPath(path, false)
