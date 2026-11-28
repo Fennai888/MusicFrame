@@ -552,20 +552,34 @@ fun App() {
                 }
             }
             if (showUpdate) {
+                val updCopyState = rememberLazyGridState(
+                    initialFirstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                    initialFirstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset
+                )
                 Box(
                     Modifier
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.15f))
                         .pointerInput(Unit) { detectTapGestures { showUpdate = false } }
                 )
-                UpdateSheet(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(16.dp)
-                        .fillMaxWidth(),
-                    onClose = { showUpdate = false }
-                )
+                CompositionLocalProvider(LocalSoftBg provides null) {
+                    UpdateSheet(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .padding(16.dp)
+                            .fillMaxWidth(),
+                        onClose = { showUpdate = false },
+                        backdrop = {
+                            HomeBackground(bg)
+                            if (songs.isEmpty()) {
+                                EmptyCard { }
+                            } else {
+                                Library(songs, updCopyState, onMore = { }) { }
+                            }
+                        }
+                    )
+                }
             }
             playingIndex?.let { i ->
                 CompositionLocalProvider(LocalGlassBackdrop provides null) {
