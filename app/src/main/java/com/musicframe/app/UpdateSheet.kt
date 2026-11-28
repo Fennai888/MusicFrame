@@ -28,7 +28,7 @@ import kotlin.math.roundToInt
 
 /** แผ่นกระจกตรวจสอบอัปเดต วางไว้ล่างจอ (ใส่ align / padding จากข้างนอก) */
 @Composable
-fun UpdateSheet(modifier: Modifier, onClose: () -> Unit) {
+fun UpdateSheet(modifier: Modifier, onClose: () -> Unit, backdrop: (@Composable () -> Unit)? = null) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val installed = remember { Updater.installedBuild(ctx) }
@@ -89,7 +89,7 @@ fun UpdateSheet(modifier: Modifier, onClose: () -> Unit) {
         onDispose { owner.lifecycle.removeObserver(obs) }
     }
 
-    Glass(modifier = modifier, radius = 32.dp, dim = 0.30f) {
+    Glass(modifier = modifier, radius = 32.dp, dim = 0.30f, backdrop = backdrop) {
         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
             Text(
                 "ตรวจสอบอัปเดต",
