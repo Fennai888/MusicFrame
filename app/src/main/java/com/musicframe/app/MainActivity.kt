@@ -490,7 +490,7 @@ fun App() {
                             }
                         }
                 )
-                CompositionLocalProvider(LocalSoftBg provides null) {
+                CompositionLocalProvider(LocalSoftBg provides null, LocalGlassBackdrop provides null) {
                     Glass(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
@@ -562,7 +562,7 @@ fun App() {
                         .background(Color.Black.copy(alpha = 0.15f))
                         .pointerInput(Unit) { detectTapGestures { showUpdate = false } }
                 )
-                CompositionLocalProvider(LocalSoftBg provides null) {
+                CompositionLocalProvider(LocalSoftBg provides null, LocalGlassBackdrop provides null) {
                     UpdateSheet(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
