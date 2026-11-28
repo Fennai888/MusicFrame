@@ -428,6 +428,10 @@ fun PlayerContent(
     var editing by remember { mutableStateOf(false) }
     var showCoverSheet by remember { mutableStateOf(false) }
     var showList by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
+    var searchTitle by remember { mutableStateOf("") }
+    var searchArtist by remember { mutableStateOf("") }
+    var applyTitle by remember { mutableStateOf(false) }
     var seeking by remember { mutableStateOf(false) }
     var seekFrac by remember { mutableFloatStateOf(0f) }
     var tiltX by remember { mutableFloatStateOf(0f) }
@@ -513,10 +517,11 @@ fun PlayerContent(
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
-    BackHandler(enabled = !editing && !showCoverSheet && !showList, onBack = onClose)
+    BackHandler(enabled = !editing && !showCoverSheet && !showList && !showSearch, onBack = onClose)
     BackHandler(enabled = editing) { editing = false }
     BackHandler(enabled = showCoverSheet) { showCoverSheet = false }
     BackHandler(enabled = showList) { showList = false }
+    BackHandler(enabled = showSearch) { showSearch = false }
 
     val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u ->
         if (u != null) {
@@ -878,7 +883,22 @@ fun PlayerContent(
                             GlassField(tArtist, { tArtist = it }, "ชื่อศิลปิน", 14.sp, false)
                             Spacer(Modifier.height(8.dp))
                             GlassField(tAlbum, { tAlbum = it }, "ข้อความฝั่งขวา (เช่น อัลบั้ม)", 14.sp, false)
-                            Spacer(Modifier.height(12.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "ค้นหาข้อมูลเพลง",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clickable {
+                                        focus.clearFocus()
+                                        searchTitle = tTitle
+                                        searchArtist = tArtist
+                                        showSearch = true
+                                    }
+                                    .padding(vertical = 6.dp)
+                            )
+                            Spacer(Modifier.height(4.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 Text(
                                     "ยกเลิก",
@@ -1021,6 +1041,12 @@ fun PlayerContent(
                             showCoverSheet = false
                             coverPicker.launch(arrayOf("image/*"))
                         }
+                        SettingRow("ค้นหาปกและข้อมูลเพลง") {
+                            showCoverSheet = false
+                            searchTitle = s.title
+                            searchArtist = s.artist
+                            showSearch = true
+                        }
                         if (spec.image.isNotBlank()) {
                             SettingRow("ใช้ปกในไฟล์เพลง") {
                                 showCoverSheet = false
@@ -1100,6 +1126,43 @@ fun PlayerContent(
                         }
                     }
                 }
+            }
+            if (showSearch) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f))
+                        .pointerInput(Unit) { detectTapGestures { showSearch = false } }
+                )
+                MusicSearchSheet(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    initialTitle = searchTitle,
+                    initialArtist = searchArtist,
+                    applyTitle = applyTitle,
+                    onToggleApplyTitle = { applyTitle = !applyTitle },
+                    onPick = { hit, coverUri ->
+                        val sp = parseCover(s.cover)
+                        val keepTitle = if (editing) tTitle.trim().ifBlank { s.title } else s.title
+                        onUpdate(
+                            index,
+                            s.copy(
+                                title = if (applyTitle) hit.title else keepTitle,
+                                artist = hit.artist.ifBlank { s.artist },
+                                album = hit.album.ifBlank { s.album },
+                                cover = if (coverUri != null) buildCover(sp.copy(image = coverUri)) else s.cover
+                            )
+                        )
+                        focus.clearFocus()
+                        showSearch = false
+                        editing = false
+                    },
+                    onClose = { showSearch = false }
+                )
             }
         }
     }
