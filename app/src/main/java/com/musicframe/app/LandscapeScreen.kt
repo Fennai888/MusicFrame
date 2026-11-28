@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 /* ---------- ตัวเชื่อมกับ PlaybackService (แบบเดียวกับ PlayerScreen) ---------- */
 
 @Composable
-fun LandscapeScreen(songs: List<Song>, bg: BgImages?, onAdd: () -> Unit) {
+fun LandscapeScreen(songs: List<Song>, bg: BgImages?, bgMode: String, onAdd: () -> Unit) {
     val ctx = LocalContext.current
     var controller by remember { mutableStateOf<MediaController?>(null) }
 
@@ -100,7 +100,7 @@ fun LandscapeScreen(songs: List<Song>, bg: BgImages?, onAdd: () -> Unit) {
     if (p == null) {
         Box(Modifier.fillMaxSize().background(Color.Black))
     } else {
-        LandscapeContent(p, songs, bg, onAdd)
+        LandscapeContent(p, songs, bg, bgMode, onAdd)
     }
 }
 
@@ -151,7 +151,7 @@ private fun playerLoaded(player: Player, songs: List<Song>): Boolean {
 }
 
 @Composable
-fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: () -> Unit) {
+fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, bgMode: String, onAdd: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var index by remember {
@@ -249,7 +249,7 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
     val bgSoft by produceState<ImageBitmap?>(null, c) {
         if (c != null) {
             value = withContext(Dispatchers.Default) {
-                softBlurBitmap(c.asAndroidBitmap(), 200, 2).asImageBitmap()
+                softBlurBitmap(c.asAndroidBitmap(), 120, 3).asImageBitmap()
             }
         }
     }
@@ -274,7 +274,7 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
     ) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
-                if (bg != null) {
+                if (bgMode != "cover" && bg != null) {
                     HomeBackground(bg)
                 } else if (c != null) {
                     val soft = bgSoft
@@ -288,7 +288,29 @@ fun LandscapeContent(player: Player, songs: List<Song>, bg: BgImages?, onAdd: ()
                             modifier = Modifier.fillMaxSize()
                         )
                     }
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)))
+                    // ไล่สีจากปก (Blur Gradient): บนอ่อน ล่างเข้มและอิ่มสี
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .drawBehind {
+                                val t = tintState.value
+                                drawRect(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            t.copy(alpha = 0.30f),
+                                            t.copy(alpha = 0.18f),
+                                            t.copy(
+                                                alpha = 0.65f,
+                                                red = t.red * 0.45f,
+                                                green = t.green * 0.45f,
+                                                blue = t.blue * 0.45f
+                                            )
+                                        )
+                                    )
+                                )
+                            }
+                    )
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.10f)))
                 } else {
                     Backdrop()
                 }
