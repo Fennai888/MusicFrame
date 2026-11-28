@@ -372,6 +372,9 @@ fun App() {
     var showSettings by remember { mutableStateOf(false) }
     var deleteIndex by remember { mutableStateOf<Int?>(null) }
     var showUpdate by remember { mutableStateOf(false) }
+    var lsBgMode by remember {
+        mutableStateOf(ctx.getSharedPreferences("settings", 0).getString("landscape_bg", "image") ?: "image")
+    }
     var screen by remember { mutableStateOf(IntSize.Zero) }
     val bg by rememberBackground(bgUri)
     val glassBackdropBase = Color.Black
@@ -431,7 +434,7 @@ fun App() {
 
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     if (landscape && songs.isNotEmpty()) {
-        LandscapeScreen(songs, bg, onAdd = { picker.launch(arrayOf("audio/*")) })
+        LandscapeScreen(songs, bg, lsBgMode, onAdd = { picker.launch(arrayOf("audio/*")) })
         return
     }
 
@@ -541,6 +544,12 @@ fun App() {
                                         showSettings = false
                                         saveBg(null)
                                     }
+                                }
+                                SettingRow(
+                                    "พื้นหลังแนวนอน: " + (if (lsBgMode == "cover") "ไล่สีจากปกเพลง" else "รูปที่ตั้งไว้")
+                                ) {
+                                    lsBgMode = if (lsBgMode == "cover") "image" else "cover"
+                                    ctx.getSharedPreferences("settings", 0).edit().putString("landscape_bg", lsBgMode).apply()
                                 }
                                 SettingRow("ตรวจสอบอัปเดต") {
                                     showSettings = false
