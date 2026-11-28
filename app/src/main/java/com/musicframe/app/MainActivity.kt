@@ -371,6 +371,7 @@ fun App() {
     var bgUri by remember { mutableStateOf(ctx.getSharedPreferences("settings", 0).getString("bg", null)) }
     var showSettings by remember { mutableStateOf(false) }
     var deleteIndex by remember { mutableStateOf<Int?>(null) }
+    var showUpdate by remember { mutableStateOf(false) }
     var screen by remember { mutableStateOf(IntSize.Zero) }
     val bg by rememberBackground(bgUri)
     val glassBackdropBase = Color.Black
@@ -426,6 +427,7 @@ fun App() {
         showSettings = false
         deleteIndex = null
     }
+    BackHandler(enabled = showUpdate) { showUpdate = false }
 
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     if (landscape && songs.isNotEmpty()) {
@@ -540,10 +542,30 @@ fun App() {
                                         saveBg(null)
                                     }
                                 }
+                                SettingRow("ตรวจสอบอัปเดต") {
+                                    showSettings = false
+                                    showUpdate = true
+                                }
                             }
                         }
                     }
                 }
+            }
+            if (showUpdate) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.15f))
+                        .pointerInput(Unit) { detectTapGestures { showUpdate = false } }
+                )
+                UpdateSheet(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    onClose = { showUpdate = false }
+                )
             }
             playingIndex?.let { i ->
                 CompositionLocalProvider(LocalGlassBackdrop provides null) {
